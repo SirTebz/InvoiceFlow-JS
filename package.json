@@ -1,0 +1,25 @@
+{
+  "name": "invoiceflow-js",
+  "version": "0.1.0",
+  "description": "InvoiceFlow MVP: simple invoicing for freelancers and small businesses.",
+  "main": "server/index.js",
+  "scripts": {
+    "dev": "node --watch server/index.js",
+    "start": "node server/index.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.0.0",
+    "pdfkit": "^0.15.2"
+  },
+  "devDependencies": {
+    "supertest": "^7.0.0"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
