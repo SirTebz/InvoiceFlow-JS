@@ -114,3 +114,22 @@ test("pdf download and mock email send work for saved invoices", () => withServe
   assert.equal(sent.data.email.provider, "mock");
   assert.equal(sent.data.email.delivered, false);
 }));
+
+test("customer search and invoice status filtering return scoped results", () => withServer(async (api) => {
+  await register(api);
+  const acme = await createCustomer(api, "Acme Ltd");
+  const beta = await api("/api/customers", { method: "POST", body: { name: "Beta Studio", email: "billing@beta.test", phone: "0123456789", billingAddress: "44 Beta Road" } });
+  assert.equal(beta.response.status, 200);
+  const invoice = await createInvoice(api, acme.id);
+  await api(`/api/invoices/${invoice.id}/send`, { method: "POST", body: { email: "billing@acme.test" } });
+
+  const customers = await api("/api/customers?search=Acme");
+  assert.equal(customers.response.status, 200);
+  assert.equal(customers.data.customers.length, 1);
+  assert.equal(customers.data.customers[0].name, "Acme Ltd");
+
+  const sentInvoices = await api("/api/invoices?status=sent&search=INV");
+  assert.equal(sentInvoices.response.status, 200);
+  assert.equal(sentInvoices.data.invoices.length, 1);
+  assert.equal(sentInvoices.data.invoices[0].status, "sent");
+}));

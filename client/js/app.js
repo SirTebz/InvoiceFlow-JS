@@ -4,7 +4,10 @@ const state = {
   customers: [],
   invoices: [],
   business: null,
-  editingInvoice: null
+  editingInvoice: null,
+  customerSearch: "",
+  invoiceSearch: "",
+  invoiceStatus: ""
 };
 
 const app = document.querySelector("#app");
@@ -94,8 +97,8 @@ function authView(mode) {
     <form class="form" id="${mode}Form">
       ${isRegister ? field("name", "Name") : ""}
       ${field("email", "Email", "email")}
-      ${field("password", "Password", "password")}
-      ${isRegister ? field("confirmPassword", "Confirm password", "password") : ""}
+      ${passwordField("password", "Password")}
+      ${isRegister ? passwordField("confirmPassword", "Confirm password") : ""}
       <button class="btn primary">${isRegister ? "Register" : "Log in"}</button>
       <button type="button" class="link-button" data-nav="${isRegister ? "login" : "register"}">${isRegister ? "Already have an account?" : "Need an account?"}</button>
     </form></section>`);
@@ -103,6 +106,10 @@ function authView(mode) {
 
 function field(name, label, type = "text", value = "") {
   return `<div class="field"><label for="${name}">${label}</label><input id="${name}" name="${name}" type="${type}" value="${escapeHtml(value)}"><span class="error" data-error="${name}"></span></div>`;
+}
+
+function passwordField(name, label) {
+  return `<div class="field"><label for="${name}">${label}</label><div class="password-wrap"><input id="${name}" name="${name}" type="password"><button type="button" class="btn secondary small" data-toggle-password="${name}" aria-label="Show ${label.toLowerCase()}">Show</button></div><span class="error" data-error="${name}"></span></div>`;
 }
 
 function textArea(name, label, value = "") {
@@ -114,11 +121,16 @@ function escapeHtml(value) {
 }
 
 async function loadCustomers() {
-  state.customers = (await api("/customers")).customers;
+  const query = state.customerSearch ? `?search=${encodeURIComponent(state.customerSearch)}` : "";
+  state.customers = (await api(`/customers${query}`)).customers;
 }
 
 async function loadInvoices() {
-  state.invoices = (await api("/invoices")).invoices;
+  const params = new URLSearchParams();
+  if (state.invoiceSearch) params.set("search", state.invoiceSearch);
+  if (state.invoiceStatus) params.set("status", state.invoiceStatus);
+  const query = params.toString() ? `?${params}` : "";
+  state.invoices = (await api(`/invoices${query}`)).invoices;
 }
 
 async function dashboard() {
@@ -143,6 +155,7 @@ async function customersView() {
   const rows = state.customers.map((c) => `<tr><td><strong>${escapeHtml(c.name)}</strong><br><span class="muted">${escapeHtml(c.email)}</span></td><td>${escapeHtml(c.phone)}</td><td>${escapeHtml(c.billing_address)}</td><td class="actions"><button class="btn secondary small" data-edit-customer="${c.id}">Edit</button><button class="btn danger small" data-delete-customer="${c.id}">Delete</button></td></tr>`).join("") || `<tr><td colspan="4" class="empty">You don't have any customers yet. <button class="btn primary small" data-new-customer>Add your first customer</button></td></tr>`;
   return shell(`<div class="section-title"><div><h1>Customers</h1><p class="muted">Manage the people and businesses you invoice.</p></div><button class="btn primary" data-new-customer>Add customer</button></div>
     <div id="customerFormSlot"></div>
+    <div class="toolbar"><input id="customerSearch" type="search" placeholder="Search customers" value="${escapeHtml(state.customerSearch)}"><button class="btn secondary" id="clearCustomerSearch">Clear</button></div>
     <div class="table-wrap"><table><thead><tr><th>Name</th><th>Phone</th><th>Billing address</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`);
 }
 
@@ -157,8 +170,14 @@ function customerForm(customer = {}) {
 
 async function invoicesView() {
   await loadInvoices();
-  const rows = state.invoices.map(invoiceRow).join("") || `<tr><td colspan="6" class="empty">No invoices yet. <button class="btn primary small" data-nav="invoice-new">Create your first invoice</button></td></tr>`;
-  return shell(`<div class="section-title"><div><h1>Invoices</h1><p class="muted">Create, send, download, and track invoices.</p></div><button class="btn primary" data-nav="invoice-new">Create invoice</button></div>${invoiceTable(rows)}`);
+  const rows = state.invoices.map(invoiceRow).join("") || `<tr><td colspan="7" class="empty">No invoices yet. <button class="btn primary small" data-nav="invoice-new">Create your first invoice</button></td></tr>`;
+  return shell(`<div class="section-title"><div><h1>Invoices</h1><p class="muted">Create, send, download, and track invoices.</p></div><button class="btn primary" data-nav="invoice-new">Create invoice</button></div>
+    <div class="toolbar">
+      <input id="invoiceSearch" type="search" placeholder="Search invoices or customers" value="${escapeHtml(state.invoiceSearch)}">
+      <select id="invoiceStatus"><option value="">All statuses</option>${["draft", "sent", "paid", "overdue", "cancelled"].map((status) => `<option value="${status}" ${state.invoiceStatus === status ? "selected" : ""}>${status[0].toUpperCase() + status.slice(1)}</option>`).join("")}</select>
+      <button class="btn secondary" id="clearInvoiceFilters">Clear</button>
+    </div>
+    ${invoiceTable(rows)}`);
 }
 
 function invoiceTable(rows) {
@@ -300,12 +319,24 @@ function bindEvents() {
   document.querySelector("#logoutBtn")?.addEventListener("click", async () => { await api("/auth/logout", { method: "POST" }); state.user = null; navigate("landing"); });
   document.querySelector("#registerForm")?.addEventListener("submit", submitAuth("register"));
   document.querySelector("#loginForm")?.addEventListener("submit", submitAuth("login"));
+  document.querySelectorAll("[data-toggle-password]").forEach((btn) => btn.addEventListener("click", () => {
+    const input = document.querySelector(`#${CSS.escape(btn.dataset.togglePassword)}`);
+    const showing = input.type === "text";
+    input.type = showing ? "password" : "text";
+    btn.textContent = showing ? "Show" : "Hide";
+    btn.setAttribute("aria-label", `${showing ? "Show" : "Hide"} ${input.name}`);
+  }));
   document.querySelector("[data-new-customer]")?.addEventListener("click", () => { document.querySelector("#customerFormSlot").innerHTML = customerForm(); bindEvents(); });
+  document.querySelector("#customerSearch")?.addEventListener("input", debounce((event) => { state.customerSearch = event.target.value; render(); }, 250));
+  document.querySelector("#clearCustomerSearch")?.addEventListener("click", () => { state.customerSearch = ""; render(); });
   document.querySelectorAll("[data-edit-customer]").forEach((btn) => btn.addEventListener("click", () => { const c = state.customers.find((x) => x.id === Number(btn.dataset.editCustomer)); document.querySelector("#customerFormSlot").innerHTML = customerForm(c); bindEvents(); }));
   document.querySelector("#customerForm")?.addEventListener("submit", submitCustomer);
   document.querySelector("[data-cancel-form]")?.addEventListener("click", () => { document.querySelector("#customerFormSlot").innerHTML = ""; });
   document.querySelectorAll("[data-delete-customer]").forEach((btn) => btn.addEventListener("click", async () => { if (confirm("Delete this customer? Historical invoices will be preserved.")) { await api(`/customers/${btn.dataset.deleteCustomer}`, { method: "DELETE" }); showToast("Customer deleted."); render(); } }));
   document.querySelector("#businessForm")?.addEventListener("submit", submitBusiness);
+  document.querySelector("#invoiceSearch")?.addEventListener("input", debounce((event) => { state.invoiceSearch = event.target.value; render(); }, 250));
+  document.querySelector("#invoiceStatus")?.addEventListener("change", (event) => { state.invoiceStatus = event.target.value; render(); });
+  document.querySelector("#clearInvoiceFilters")?.addEventListener("click", () => { state.invoiceSearch = ""; state.invoiceStatus = ""; render(); });
   document.querySelector("#invoiceForm")?.addEventListener("submit", submitInvoice);
   document.querySelector("#invoiceForm")?.addEventListener("input", calculateClientInvoice);
   document.querySelector("#addItem")?.addEventListener("click", () => { document.querySelector("#items").insertAdjacentHTML("beforeend", itemForm({ taxRate: state.business?.default_tax_rate || 15 })); bindEvents(); calculateClientInvoice(); });
@@ -318,6 +349,14 @@ function bindEvents() {
   document.querySelector("#recurringForm")?.addEventListener("submit", submitRecurring);
   document.querySelectorAll("[data-rec-status]").forEach((btn) => btn.addEventListener("click", async () => { await api(`/recurring-invoices/${btn.dataset.recStatus}`, { method: "PUT", body: { status: btn.dataset.status } }); showToast("Recurring invoice updated."); render(); }));
   document.querySelectorAll("[data-delete-rec]").forEach((btn) => btn.addEventListener("click", async () => { await api(`/recurring-invoices/${btn.dataset.deleteRec}`, { method: "DELETE" }); showToast("Recurring invoice cancelled."); render(); }));
+}
+
+function debounce(callback, delay) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => callback(...args), delay);
+  };
 }
 
 function submitAuth(mode) {

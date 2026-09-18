@@ -67,6 +67,7 @@ h1, h2, h3 { margin-top: 0; }
 }
 .field textarea { min-height: 92px; resize: vertical; }
 .field .error { color: var(--danger); font-size: 12px; min-height: 14px; }
+.password-wrap { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
