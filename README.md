@@ -35,4 +35,4 @@ Open `http://localhost:3000` in your browser.
 npm test
 ```
 
-Executes 21 automated tests covering authentication, customers, financial calculations, multi-page vector PDF generation, public client access, view tracking, delivery logging, and security isolation.
+Executes 23 automated tests covering authentication, customers, financial calculations, multi-page vector PDF generation, public client access, view tracking, delivery logging, server-side validation bounds, and security isolation.

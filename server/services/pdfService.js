@@ -33,22 +33,21 @@ async function generateInvoicePdf({ invoice, items = [], customer = {}, business
   const MARGIN_RIGHT = 45;
   const CONTENT_WIDTH = PAGE_WIDTH - MARGIN_LEFT - MARGIN_RIGHT;
 
-  // Pagination calculation
-  // First page has header (~240pt) + table header (24pt) + footer/totals (~200pt)
-  // Max items on page 1 without breaking = ~10 items.
-  // Multi-page logic:
-  const ITEMS_PER_FIRST_PAGE = 8;
-  const ITEMS_PER_SUB_PAGE = 18;
-
+  // Smart pagination
   const itemPages = [];
-  if (items.length <= ITEMS_PER_FIRST_PAGE) {
+  if (items.length <= 9) {
     itemPages.push(items);
   } else {
-    itemPages.push(items.slice(0, ITEMS_PER_FIRST_PAGE));
-    let remaining = items.slice(ITEMS_PER_FIRST_PAGE);
+    itemPages.push(items.slice(0, 12));
+    let remaining = items.slice(12);
     while (remaining.length > 0) {
-      itemPages.push(remaining.slice(0, ITEMS_PER_SUB_PAGE));
-      remaining = remaining.slice(ITEMS_PER_SUB_PAGE);
+      if (remaining.length <= 14) {
+        itemPages.push(remaining);
+        break;
+      } else {
+        itemPages.push(remaining.slice(0, 20));
+        remaining = remaining.slice(20);
+      }
     }
   }
 
@@ -75,7 +74,6 @@ async function generateInvoicePdf({ invoice, items = [], customer = {}, business
     };
 
     const rightText = (str, rightX, y, size = 10, font = "/F1", color = [0.1, 0.1, 0.1]) => {
-      // Estimate width ~ size * 0.52 per char for Helvetica
       const strLen = String(str).length;
       const estWidth = strLen * (size * 0.52);
       const startX = Math.max(MARGIN_LEFT, rightX - estWidth);
@@ -107,15 +105,15 @@ async function generateInvoicePdf({ invoice, items = [], customer = {}, business
       }
 
       // Business Branding / Header
-      const bizName = business.business_name || "InvoiceFlow Business";
+      const bizName = (business.business_name || "InvoiceFlow Business").slice(0, 36);
       text(bizName, MARGIN_LEFT, curY - 5, 18, "/F2", [0.08, 0.1, 0.15]);
       
       let bizY = curY - 22;
       const bizDetails = [
-        business.address,
-        [business.email, business.phone].filter(Boolean).join(" • "),
-        business.website ? `Website: ${business.website}` : null,
-        business.tax_number ? `Tax/VAT: ${business.tax_number}` : null
+        business.address ? business.address.slice(0, 45) : null,
+        [business.email, business.phone].filter(Boolean).join(" • ").slice(0, 45),
+        business.website ? `Website: ${business.website.slice(0, 35)}` : null,
+        business.tax_number ? `Tax/VAT: ${business.tax_number.slice(0, 25)}` : null
       ].filter(Boolean);
 
       bizDetails.forEach((lineText) => {
@@ -124,7 +122,7 @@ async function generateInvoicePdf({ invoice, items = [], customer = {}, business
       });
 
       // Invoice Title & Metadata (Top Right)
-      const invTitle = template === "minimal" ? "INVOICE" : "INVOICE";
+      const invTitle = "INVOICE";
       rightText(invTitle, PAGE_WIDTH - MARGIN_RIGHT, curY - 5, 20, "/F2", [ar, ag, ab]);
       rightText(invoice.invoice_number || "INV-0001", PAGE_WIDTH - MARGIN_RIGHT, curY - 24, 12, "/F2", [0.1, 0.1, 0.1]);
 
@@ -145,25 +143,26 @@ async function generateInvoicePdf({ invoice, items = [], customer = {}, business
       text("BILL TO", MARGIN_LEFT, curY, 9, "/F2", [ar, ag, ab]);
       
       let custY = curY - 14;
-      text(customer.name || "Valued Customer", MARGIN_LEFT, custY, 11, "/F2", [0.1, 0.1, 0.1]);
+      const custName = (customer.name || "Valued Customer").slice(0, 40);
+      text(custName, MARGIN_LEFT, custY, 11, "/F2", [0.1, 0.1, 0.1]);
       custY -= 14;
       if (customer.billing_address) {
-        text(customer.billing_address, MARGIN_LEFT, custY, 9, "/F1", [0.35, 0.4, 0.45]);
+        text(customer.billing_address.slice(0, 48), MARGIN_LEFT, custY, 9, "/F1", [0.35, 0.4, 0.45]);
         custY -= 13;
       }
       if (customer.email) {
-        text(customer.email, MARGIN_LEFT, custY, 9, "/F1", [0.35, 0.4, 0.45]);
+        text(customer.email.slice(0, 48), MARGIN_LEFT, custY, 9, "/F1", [0.35, 0.4, 0.45]);
         custY -= 13;
       }
       if (customer.phone) {
-        text(customer.phone, MARGIN_LEFT, custY, 9, "/F1", [0.35, 0.4, 0.45]);
+        text(customer.phone.slice(0, 30), MARGIN_LEFT, custY, 9, "/F1", [0.35, 0.4, 0.45]);
         custY -= 13;
       }
 
       curY = Math.min(custY - 10, 595);
     } else {
       // Sub-page compact header
-      text(`${business.business_name || "Invoice"} — ${invoice.invoice_number}`, MARGIN_LEFT, curY, 10, "/F2", [0.3, 0.3, 0.3]);
+      text(`${(business.business_name || "Invoice").slice(0, 30)} — ${invoice.invoice_number}`, MARGIN_LEFT, curY, 10, "/F2", [0.3, 0.3, 0.3]);
       rightText(`Page ${pageIdx + 1} of ${totalPages}`, PAGE_WIDTH - MARGIN_RIGHT, curY, 9, "/F1", [0.5, 0.5, 0.5]);
       curY -= 10;
       line(MARGIN_LEFT, curY, PAGE_WIDTH - MARGIN_RIGHT, curY, [0.88, 0.9, 0.93], 1);
@@ -199,7 +198,8 @@ async function generateInvoicePdf({ invoice, items = [], customer = {}, business
         rect(MARGIN_LEFT, curY - 5, CONTENT_WIDTH, 20, [0.98, 0.98, 0.99]);
       }
 
-      const desc = (item.description || "Item").slice(0, 42);
+      const rawDesc = String(item.description || "Item");
+      const desc = rawDesc.length > 44 ? `${rawDesc.slice(0, 41)}...` : rawDesc;
       text(desc, colDescX, curY, 9, "/F1", [0.15, 0.15, 0.15]);
       text(String(item.quantity || 1), colQtyX, curY, 9, "/F1", [0.2, 0.2, 0.2]);
       text(pdfMoney(item.unit_price_cents, currency), colRateX, curY, 9, "/F1", [0.2, 0.2, 0.2]);
@@ -240,7 +240,7 @@ async function generateInvoicePdf({ invoice, items = [], customer = {}, business
         notesY -= 13;
         const payLines = business.payment_details.split("\n").slice(0, 3);
         payLines.forEach((pLine) => {
-          text(pLine.trim(), MARGIN_LEFT, notesY, 8, "/F1", [0.35, 0.4, 0.45]);
+          text(pLine.trim().slice(0, 50), MARGIN_LEFT, notesY, 8, "/F1", [0.35, 0.4, 0.45]);
           notesY -= 11;
         });
       }
@@ -269,12 +269,6 @@ function buildMultiPagePdf(pageStreams) {
   const objects = [];
   const pageObjIds = [];
 
-  // 1: Catalog
-  // 2: Pages container
-  // 3: Font F1 (Helvetica)
-  // 4: Font F2 (Helvetica-Bold)
-  // 5+: Page and Content objects
-
   const fontF1Id = 3;
   const fontF2Id = 4;
 
@@ -285,7 +279,6 @@ function buildMultiPagePdf(pageStreams) {
     pageObjIds.push(pageId);
   }
 
-  // Build objects list
   objects.push({
     id: 1,
     body: "<< /Type /Catalog /Pages 2 0 R >>"
@@ -327,7 +320,6 @@ function buildMultiPagePdf(pageStreams) {
   let pdf = "%PDF-1.4\n";
   const offsets = [0];
 
-  // Sort objects by id
   objects.sort((a, b) => a.id - b.id);
 
   objects.forEach((obj) => {

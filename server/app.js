@@ -46,16 +46,24 @@ async function handleApi(req, res, url) {
     return publicInvoiceRoute(req, res, db, parts);
   }
 
-  // Development Emails Route
-  if (parts[0] === "dev" && parts[1] === "emails" && method === "GET") {
-    return json(res, 200, { emails: getRecentMockEmails() });
-  }
-
   // Auth Routes
   if (method === "POST" && parts.join("/") === "auth/register") return register(req, res, body, db);
   if (method === "POST" && parts.join("/") === "auth/login") return login(req, res, body, db);
   if (method === "POST" && parts.join("/") === "auth/logout") return logout(req, res, db);
-  if (method === "GET" && parts.join("/") === "auth/me") return json(res, 200, { user: req.user });
+  if (method === "GET" && parts.join("/") === "auth/me") {
+    return json(res, 200, {
+      user: req.user,
+      config: { isMockEmail: config.email.provider === "mock" }
+    });
+  }
+
+  // Protected Development Emails Route (Restricted to authenticated sessions in mock mode)
+  if (parts[0] === "dev" && parts[1] === "emails" && method === "GET") {
+    if (config.email.provider !== "mock") {
+      return json(res, 403, { error: { message: "Development email inspector is only available in mock mode." } });
+    }
+    return json(res, 200, { emails: getRecentMockEmails() });
+  }
 
   if (!req.user) return json(res, 401, { error: { message: "Please log in to continue." } });
 
@@ -113,7 +121,6 @@ function publicInvoiceRoute(req, res, db, parts) {
 
   // Get Public Invoice JSON & Increment View Tracking
   if (req.method === "GET" && !action) {
-    // Record view asynchronously
     try {
       db.prepare(`
         UPDATE invoices
@@ -126,7 +133,7 @@ function publicInvoiceRoute(req, res, db, parts) {
       // Ignore view tracking error
     }
 
-    // Return strictly sanitized data for customer view
+    // Return strictly sanitized data for customer view (no internal password, user ID, or session data)
     return json(res, 200, {
       invoice: {
         invoice_number: invoice.invoice_number,
@@ -175,18 +182,29 @@ function publicInvoiceRoute(req, res, db, parts) {
 
 async function register(req, res, body, db) {
   const fields = {};
-  if (!String(body.name || "").trim()) fields.name = "Name is required.";
-  if (!emailValid(body.email)) fields.email = "Enter a valid email address.";
-  if (String(body.password || "").length < 8) fields.password = "Use at least 8 characters.";
-  if (body.password !== body.confirmPassword) fields.confirmPassword = "Passwords must match.";
+  const name = String(body.name || "").trim();
+  const email = String(body.email || "").trim().toLowerCase();
+  const password = String(body.password || "");
+
+  if (!name) fields.name = "Name is required.";
+  else if (name.length > 100) fields.name = "Name cannot exceed 100 characters.";
+
+  if (!emailValid(email)) fields.email = "Enter a valid email address.";
+  else if (email.length > 150) fields.email = "Email cannot exceed 150 characters.";
+
+  if (password.length < 8) fields.password = "Use at least 8 characters.";
+  else if (password.length > 128) fields.password = "Password cannot exceed 128 characters.";
+
+  if (password !== body.confirmPassword) fields.confirmPassword = "Passwords must match.";
   if (Object.keys(fields).length) return bad(res, "Please check the highlighted fields.", fields);
+
   try {
-    const passwordHash = await hashPassword(body.password);
-    const result = db.prepare("INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)").run(body.name.trim(), body.email.trim().toLowerCase(), passwordHash);
-    db.prepare("INSERT INTO business_profiles (user_id, email, business_name) VALUES (?, ?, ?)").run(result.lastInsertRowid, body.email.trim().toLowerCase(), `${body.name.trim()}'s Studio`);
+    const passwordHash = await hashPassword(password);
+    const result = db.prepare("INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)").run(name, email, passwordHash);
+    db.prepare("INSERT INTO business_profiles (user_id, email, business_name) VALUES (?, ?, ?)").run(result.lastInsertRowid, email, `${name}'s Studio`);
     ensureSubscription(result.lastInsertRowid, db);
     createSession(res, result.lastInsertRowid, db);
-    return json(res, 200, { user: { id: result.lastInsertRowid, name: body.name.trim(), email: body.email.trim().toLowerCase() } });
+    return json(res, 200, { user: { id: result.lastInsertRowid, name, email } });
   } catch (error) {
     if (String(error.message).includes("UNIQUE")) return bad(res, "An account already exists for that email.", { email: "Email is already registered." });
     throw error;
@@ -218,21 +236,35 @@ function updateBusiness(res, db, userId, body) {
     return bad(res, "Logo must be a valid image data URL under 2MB.", { logo: "Invalid image format" });
   }
 
+  const businessName = String(body.businessName || "").trim().slice(0, 100);
+  const email = String(body.email || "").trim().slice(0, 100);
+  const phone = String(body.phone || "").trim().slice(0, 50);
+  const address = String(body.address || "").trim().slice(0, 500);
+  const website = String(body.website || "").trim().slice(0, 200);
+  const taxNumber = String(body.taxNumber || "").trim().slice(0, 50);
+  const currency = ["ZAR", "USD", "EUR", "GBP"].includes(String(body.currency || "").toUpperCase()) ? String(body.currency).toUpperCase() : "ZAR";
+  const defaultTaxRate = Math.min(10000, Math.max(0, Math.round(Number(body.defaultTaxRate || 0) * 100)));
+  const paymentDetails = String(body.paymentDetails || "").slice(0, 2000);
+  const invoicePrefix = String(body.invoicePrefix || "INV-").trim().slice(0, 20);
+  const nextInvoiceNumber = Math.max(1, Math.min(9999999, Math.round(Number(body.nextInvoiceNumber || 1))));
+  const accentColor = /^#[0-9a-f]{6}$/i.test(body.accentColor || "") ? body.accentColor : "#2563eb";
+  const invoiceTemplate = ["clean", "professional", "minimal"].includes(body.invoiceTemplate) ? body.invoiceTemplate : "clean";
+
   const values = [
-    body.businessName || "",
+    businessName,
     logo,
-    body.email || "",
-    body.phone || "",
-    body.address || "",
-    body.website || "",
-    body.taxNumber || "",
-    String(body.currency || "ZAR").toUpperCase(),
-    Math.max(0, Math.round(Number(body.defaultTaxRate || 0) * 100)),
-    body.paymentDetails || "",
-    body.invoicePrefix || "INV-",
-    Math.max(1, Number(body.nextInvoiceNumber || 1)),
-    /^#[0-9a-f]{6}$/i.test(body.accentColor || "") ? body.accentColor : "#2563eb",
-    ["clean", "professional", "minimal"].includes(body.invoiceTemplate) ? body.invoiceTemplate : "clean",
+    email,
+    phone,
+    address,
+    website,
+    taxNumber,
+    currency,
+    defaultTaxRate,
+    paymentDetails,
+    invoicePrefix,
+    nextInvoiceNumber,
+    accentColor,
+    invoiceTemplate,
     userId
   ];
   db.prepare(`UPDATE business_profiles SET business_name=?, logo_data_url=?, email=?, phone=?, address=?, website=?, tax_number=?, currency=?, default_tax_rate=?, payment_details=?, invoice_prefix=?, next_invoice_number=?, accent_color=?, invoice_template=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?`).run(...values);
@@ -246,15 +278,34 @@ function customersRoute(req, res, db, parts, body, url) {
     return json(res, 200, { customers: db.prepare("SELECT * FROM customers WHERE user_id=? AND deleted_at IS NULL AND (name LIKE ? OR email LIKE ?) ORDER BY name").all(req.user.id, search, search) });
   }
   if (req.method === "POST" && !id) {
-    if (!String(body.name || "").trim()) return bad(res, "Customer name is required.", { name: "Name is required." });
-    const result = db.prepare("INSERT INTO customers (user_id, name, email, phone, billing_address, notes) VALUES (?, ?, ?, ?, ?, ?)").run(req.user.id, body.name.trim(), body.email || "", body.phone || "", body.billingAddress || "", body.notes || "");
+    const name = String(body.name || "").trim();
+    if (!name) return bad(res, "Customer name is required.", { name: "Name is required." });
+    if (name.length > 150) return bad(res, "Customer name cannot exceed 150 characters.", { name: "Name too long." });
+    const result = db.prepare("INSERT INTO customers (user_id, name, email, phone, billing_address, notes) VALUES (?, ?, ?, ?, ?, ?)").run(
+      req.user.id,
+      name,
+      String(body.email || "").trim().slice(0, 150),
+      String(body.phone || "").trim().slice(0, 50),
+      String(body.billingAddress || "").trim().slice(0, 1000),
+      String(body.notes || "").trim().slice(0, 2000)
+    );
     return json(res, 200, { customer: db.prepare("SELECT * FROM customers WHERE id=?").get(result.lastInsertRowid) });
   }
   const existing = db.prepare("SELECT * FROM customers WHERE id=? AND user_id=? AND deleted_at IS NULL").get(id, req.user.id);
   if (!existing) return json(res, 404, { error: { message: "Customer not found." } });
   if (req.method === "PUT") {
-    if (!String(body.name || "").trim()) return bad(res, "Customer name is required.", { name: "Name is required." });
-    db.prepare("UPDATE customers SET name=?, email=?, phone=?, billing_address=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(body.name.trim(), body.email || "", body.phone || "", body.billingAddress || "", body.notes || "", id, req.user.id);
+    const name = String(body.name || "").trim();
+    if (!name) return bad(res, "Customer name is required.", { name: "Name is required." });
+    if (name.length > 150) return bad(res, "Customer name cannot exceed 150 characters.", { name: "Name too long." });
+    db.prepare("UPDATE customers SET name=?, email=?, phone=?, billing_address=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(
+      name,
+      String(body.email || "").trim().slice(0, 150),
+      String(body.phone || "").trim().slice(0, 50),
+      String(body.billingAddress || "").trim().slice(0, 1000),
+      String(body.notes || "").trim().slice(0, 2000),
+      id,
+      req.user.id
+    );
     return json(res, 200, { customer: db.prepare("SELECT * FROM customers WHERE id=?").get(id) });
   }
   if (req.method === "DELETE") {
@@ -334,8 +385,8 @@ function saveInvoice(res, db, userId, body, existing) {
       validation.totals.subtotalCents,
       validation.totals.taxCents,
       validation.totals.totalCents,
-      body.notes || "",
-      body.paymentTerms || "",
+      String(body.notes || "").slice(0, 2000),
+      String(body.paymentTerms || "").slice(0, 2000),
       existing.id,
       userId
     );
@@ -354,8 +405,8 @@ function saveInvoice(res, db, userId, body, existing) {
       validation.totals.subtotalCents,
       validation.totals.taxCents,
       validation.totals.totalCents,
-      body.notes || "",
-      body.paymentTerms || "",
+      String(body.notes || "").slice(0, 2000),
+      String(body.paymentTerms || "").slice(0, 2000),
       publicToken
     );
     existing = { id: result.lastInsertRowid };
@@ -440,7 +491,7 @@ function markPaid(req, res, db, invoice, body) {
     invoice.id,
     body.paymentDate || new Date().toISOString().slice(0, 10),
     amountCents,
-    body.reference || ""
+    String(body.reference || "").slice(0, 200)
   );
   db.prepare("UPDATE invoices SET status='paid', updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(invoice.id, req.user.id);
   return json(res, 200, { invoice: getInvoice(db, req.user.id, invoice.id) });
@@ -489,7 +540,16 @@ function recurringRoute(req, res, db, parts, body) {
     if (!["weekly", "monthly", "quarterly", "yearly"].includes(body.frequency)) return bad(res, "Choose a supported frequency.", { frequency: "Invalid frequency." });
     const customer = db.prepare("SELECT * FROM customers WHERE id=? AND user_id=? AND deleted_at IS NULL").get(body.customerId, req.user.id);
     if (!customer) return bad(res, "Select one of your saved customers.", { customerId: "Invalid customer." });
-    const result = db.prepare("INSERT INTO recurring_invoices (user_id, customer_id, title, frequency, start_date, next_invoice_date, end_date, status, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)").run(req.user.id, body.customerId, body.title || `${customer.name} recurring invoice`, body.frequency, body.startDate, body.nextInvoiceDate || body.startDate, body.endDate || null, JSON.stringify(body));
+    const result = db.prepare("INSERT INTO recurring_invoices (user_id, customer_id, title, frequency, start_date, next_invoice_date, end_date, status, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)").run(
+      req.user.id,
+      body.customerId,
+      String(body.title || `${customer.name} recurring invoice`).slice(0, 150),
+      body.frequency,
+      body.startDate,
+      body.nextInvoiceDate || body.startDate,
+      body.endDate || null,
+      JSON.stringify(body)
+    );
     return json(res, 200, { recurringInvoice: db.prepare("SELECT * FROM recurring_invoices WHERE id=?").get(result.lastInsertRowid) });
   }
   if (req.method === "PUT") {
@@ -514,15 +574,23 @@ function validateInvoice(body, db, userId) {
   const business = db.prepare("SELECT * FROM business_profiles WHERE user_id=?").get(userId);
   const rawItems = Array.isArray(body.items) ? body.items : [];
   if (!rawItems.length) fields.items = "Add at least one line item.";
+  else if (rawItems.length > 100) fields.items = "Invoices cannot exceed 100 line items.";
   
   rawItems.forEach((item, index) => {
-    if (!String(item.description || "").trim()) fields[`items.${index}.description`] = "Description is required.";
-    if (Number(item.quantity) <= 0 || isNaN(Number(item.quantity))) fields[`items.${index}.quantity`] = "Quantity must be positive.";
-    if (Number(item.unitPrice) < 0 || isNaN(Number(item.unitPrice))) fields[`items.${index}.unitPrice`] = "Price cannot be negative.";
+    const desc = String(item.description || "").trim();
+    const qty = Number(item.quantity);
+    const price = Number(item.unitPrice);
+
+    if (!desc) fields[`items.${index}.description`] = "Description is required.";
+    else if (desc.length > 300) fields[`items.${index}.description`] = "Description cannot exceed 300 characters.";
+
+    if (!Number.isFinite(qty) || qty <= 0 || qty > 1000000) fields[`items.${index}.quantity`] = "Quantity must be a positive number up to 1,000,000.";
+    if (!Number.isFinite(price) || price < 0 || price > 100000000) fields[`items.${index}.unitPrice`] = "Price must be a valid amount up to 100,000,000.";
   });
 
-  if (Number(body.discount || 0) < 0) {
-    fields.discount = "Discount cannot be negative.";
+  const discountNum = Number(body.discount || 0);
+  if (!Number.isFinite(discountNum) || discountNum < 0 || discountNum > 100000000) {
+    fields.discount = "Discount must be a valid non-negative amount.";
   }
 
   if (Object.keys(fields).length) return { fields };
@@ -559,7 +627,6 @@ function serveStatic(_req, res, url) {
   const clientRoot = path.join(__dirname, "..", "client");
   const safePath = path.normalize(url.pathname).replace(/^(\.\.[/\\])+/, "");
   
-  // Direct client routes like /invoice/:token or /login should serve index.html
   let filePath = path.join(clientRoot, safePath === "/" ? "index.html" : safePath);
   if (!filePath.startsWith(clientRoot) || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory() || safePath.startsWith("invoice/")) {
     filePath = path.join(clientRoot, "index.html");

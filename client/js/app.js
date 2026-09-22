@@ -1,5 +1,6 @@
 const state = {
   user: null,
+  isMockEmail: true,
   route: getInitialRoute(),
   publicToken: getInitialPublicToken(),
   customers: [],
@@ -91,6 +92,13 @@ window.addEventListener("hashchange", () => {
   render();
 });
 
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && state.modal) {
+    state.modal = null;
+    render();
+  }
+});
+
 function shell(content) {
   if (state.route === "public-invoice") return content;
   if (!state.user) return `${publicNav()}${content}${renderModal()}`;
@@ -109,7 +117,7 @@ function shell(content) {
         ${tabs.map(([id, label]) => `<button class="${state.route === id || (id === "invoices" && state.route.startsWith("invoice")) ? "active" : ""}" data-nav="${id}">${label}</button>`).join("")}
       </nav>
       <div class="userbar">
-        <button class="btn secondary small" id="btnDevEmails" title="Inspect recent development mock emails">📧 Dev Emails</button>
+        ${state.isMockEmail ? `<button class="btn secondary small" id="btnDevEmails" title="Inspect recent development mock emails">📧 Dev Emails</button>` : ""}
         <span>${escapeHtml(state.user.name)}</span>
         <button class="btn secondary small" id="logoutBtn">Log out</button>
       </div>
@@ -135,8 +143,8 @@ function landing() {
     <main class="container">
       <section class="hero">
         <div>
-          <h1>Simple, Professional Invoicing for Modern Freelancers</h1>
-          <p>Create elegant invoices in seconds, send secure public links to clients, download vector PDFs, track payments and invoice views effortlessly.</p>
+          <h1>Create invoices.<br>Send them to customers.<br>Track when they are paid.</h1>
+          <p>InvoiceFlow is simple invoicing software built for freelancers and small businesses. Create professional invoices in seconds, send secure public links to clients, and track payments without bloated accounting complexity.</p>
           <div class="actions">
             <button class="btn primary" data-nav="register">Get Started Free</button>
             <button class="btn secondary" data-nav="login">Sign In</button>
@@ -512,7 +520,7 @@ async function invoiceEditor(id) {
           </div>
           <div class="actions" style="margin-top:24px; justify-content:flex-end;">
             <button type="button" class="btn secondary" data-nav="invoices">Cancel</button>
-            <button type="submit" class="btn primary">Save Invoice</button>
+            <button type="submit" class="btn primary" id="btnSubmitInvoice">Save Invoice</button>
           </div>
         </section>
       </div>
@@ -1181,6 +1189,14 @@ function bindEvents() {
     render();
   }));
 
+  // Backdrop click to close
+  document.querySelector("#modalBackdrop")?.addEventListener("click", (e) => {
+    if (e.target.id === "modalBackdrop") {
+      state.modal = null;
+      render();
+    }
+  });
+
   // Dev emails modal
   document.querySelector("#btnDevEmails")?.addEventListener("click", async () => {
     const res = await api("/dev/emails");
@@ -1242,13 +1258,15 @@ function bindEvents() {
   document.querySelectorAll("[data-pdf]").forEach((btn) => btn.addEventListener("click", () => {
     window.open(`/api/invoices/${btn.dataset.pdf}/pdf`, "_blank");
   }));
-  document.querySelectorAll("[data-duplicate-invoice]").forEach((btn) => btn.addEventListener("click", async () => {
+  document.querySelectorAll("[data-duplicate-invoice]").forEach((btn) => btn.addEventListener("click", async (e) => {
+    e.target.disabled = true;
     try {
       const result = await api(`/invoices/${btn.dataset.duplicateInvoice}/duplicate`, { method: "POST" });
       showToast("Invoice duplicated as draft.");
       navigate(`invoice-edit-${result.invoice.id}`);
-    } catch (e) {
-      showToast(e.error?.message || "Failed to duplicate invoice.");
+    } catch (err) {
+      showToast(err.error?.message || "Failed to duplicate invoice.");
+      e.target.disabled = false;
     }
   }));
   document.querySelectorAll("[data-open-send]").forEach((btn) => btn.addEventListener("click", async () => {
@@ -1271,6 +1289,7 @@ function bindEvents() {
     render();
   }));
   document.querySelector("#btnConfirmCancelInvoice")?.addEventListener("click", async (e) => {
+    e.target.disabled = true;
     try {
       await api(`/invoices/${e.target.dataset.id}/cancel`, { method: "POST" });
       showToast("Invoice cancelled.");
@@ -1278,6 +1297,7 @@ function bindEvents() {
       render();
     } catch (err) {
       showToast(err.error?.message || "Could not cancel invoice.");
+      e.target.disabled = false;
     }
   });
 
@@ -1402,6 +1422,8 @@ function debounce(callback, delay) {
 function submitAuth(mode) {
   return async (event) => {
     event.preventDefault();
+    const btn = event.target.querySelector("button.btn.primary");
+    if (btn) btn.disabled = true;
     try {
       const data = await api(`/auth/${mode}`, { method: "POST", body: formData(event.target) });
       state.user = data.user;
@@ -1409,6 +1431,8 @@ function submitAuth(mode) {
       navigate("dashboard");
     } catch (error) {
       showErrors(error);
+    } finally {
+      if (btn) btn.disabled = false;
     }
   };
 }
@@ -1416,13 +1440,14 @@ function submitAuth(mode) {
 async function submitModalCustomer(event) {
   event.preventDefault();
   const id = event.target.dataset.id;
+  const btn = event.target.querySelector("button[type=submit]");
+  if (btn) btn.disabled = true;
   try {
     const res = await api(id ? `/customers/${id}` : "/customers", { method: id ? "PUT" : "POST", body: formData(event.target) });
     showToast(id ? "Customer updated." : "Customer created.");
     await loadCustomers({ useSearch: false });
     state.modal = null;
     
-    // If we're inside the invoice editor, auto-select the newly created customer!
     const customerSelect = document.querySelector("#customerId");
     if (customerSelect && res.customer) {
       customerSelect.innerHTML = `<option value="">Select a saved customer...</option>${state.customers.map((c) => `<option value="${c.id}" ${c.id === res.customer.id ? "selected" : ""}>${escapeHtml(c.name)} ${c.email ? `(${escapeHtml(c.email)})` : ""}</option>`).join("")}`;
@@ -1436,6 +1461,8 @@ async function submitModalCustomer(event) {
     render();
   } catch (error) {
     showErrors(error);
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -1443,6 +1470,8 @@ async function submitModalSend(event) {
   event.preventDefault();
   const id = event.target.dataset.id;
   const body = formData(event.target);
+  const btn = event.target.querySelector("button[type=submit]");
+  if (btn) btn.disabled = true;
   try {
     const res = await api(`/invoices/${id}/send`, { method: "POST", body });
     showToast(res.delivery?.message || "Invoice sent successfully via email.");
@@ -1450,6 +1479,8 @@ async function submitModalSend(event) {
     render();
   } catch (error) {
     showErrors(error);
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -1457,6 +1488,8 @@ async function submitModalPaid(event) {
   event.preventDefault();
   const id = event.target.dataset.id;
   const body = formData(event.target);
+  const btn = event.target.querySelector("button[type=submit]");
+  if (btn) btn.disabled = true;
   try {
     await api(`/invoices/${id}/mark-paid`, { method: "POST", body });
     showToast("Payment recorded. Invoice marked as paid.");
@@ -1464,11 +1497,15 @@ async function submitModalPaid(event) {
     render();
   } catch (error) {
     showErrors(error);
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
 async function submitBusiness(event) {
   event.preventDefault();
+  const btn = event.target.querySelector("button.btn.primary");
+  if (btn) btn.disabled = true;
   try {
     const data = await api("/business", { method: "PUT", body: formData(event.target) });
     state.business = data.profile;
@@ -1476,6 +1513,8 @@ async function submitBusiness(event) {
     render();
   } catch (error) {
     showErrors(error);
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -1496,23 +1535,31 @@ async function submitInvoice(event) {
   }));
 
   const id = form.dataset.id;
+  const btn = document.querySelector("#btnSubmitInvoice");
+  if (btn) btn.disabled = true;
   try {
     const result = await api(id ? `/invoices/${id}` : "/invoices", { method: id ? "PUT" : "POST", body });
     showToast("Invoice saved successfully.");
     navigate(`invoice-${result.invoice.id}`);
   } catch (error) {
     showErrors(error);
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
 async function submitRecurring(event) {
   event.preventDefault();
+  const btn = event.target.querySelector("button.btn.primary");
+  if (btn) btn.disabled = true;
   try {
     await api("/recurring-invoices", { method: "POST", body: formData(event.target) });
     showToast("Recurring invoice schedule created.");
     render();
   } catch (error) {
     showErrors(error);
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -1520,6 +1567,7 @@ async function boot() {
   try {
     const session = await api("/auth/me");
     state.user = session.user;
+    state.isMockEmail = Boolean(session.config?.isMockEmail);
     if (state.user) {
       const biz = await api("/business");
       state.business = biz.profile;
@@ -1529,6 +1577,7 @@ async function boot() {
     }
   } catch (_e) {
     state.user = null;
+    state.isMockEmail = true;
   }
   render();
 }

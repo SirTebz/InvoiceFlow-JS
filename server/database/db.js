@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const { DatabaseSync } = require("node:sqlite");
 const config = require("../config");
 
@@ -37,6 +38,7 @@ function addColumnIfNotExists(database, tableName, columnName, columnDef) {
 }
 
 function migrate() {
+  // Step 1: Create all core tables if they do not exist
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,12 +108,6 @@ function migrate() {
       payment_terms TEXT DEFAULT '',
       sent_at TEXT,
       cancelled_at TEXT,
-      public_token TEXT UNIQUE,
-      first_viewed_at TEXT,
-      last_viewed_at TEXT,
-      view_count INTEGER NOT NULL DEFAULT 0,
-      delivery_status TEXT NOT NULL DEFAULT 'not_sent',
-      last_delivered_at TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(user_id, invoice_number)
@@ -180,21 +176,35 @@ function migrate() {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
-
-    CREATE INDEX IF NOT EXISTS idx_customers_user ON customers(user_id);
-    CREATE INDEX IF NOT EXISTS idx_invoices_user ON invoices(user_id);
-    CREATE INDEX IF NOT EXISTS idx_invoices_token ON invoices(public_token);
-    CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id);
-    CREATE INDEX IF NOT EXISTS idx_email_logs_invoice ON email_logs(invoice_id);
   `);
 
-  // Ensure columns exist if table was already created in prior phases
+  // Step 2: Ensure any columns added in later phases are added before indexes
   addColumnIfNotExists(db, "invoices", "public_token", "TEXT");
   addColumnIfNotExists(db, "invoices", "first_viewed_at", "TEXT");
   addColumnIfNotExists(db, "invoices", "last_viewed_at", "TEXT");
   addColumnIfNotExists(db, "invoices", "view_count", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfNotExists(db, "invoices", "delivery_status", "TEXT NOT NULL DEFAULT 'not_sent'");
   addColumnIfNotExists(db, "invoices", "last_delivered_at", "TEXT");
+
+  // Step 3: Backfill any existing invoices that are missing a public_token
+  try {
+    const withoutToken = db.prepare("SELECT id FROM invoices WHERE public_token IS NULL OR public_token = ''").all();
+    for (const row of withoutToken) {
+      const token = crypto.randomBytes(24).toString("base64url");
+      db.prepare("UPDATE invoices SET public_token=? WHERE id=?").run(token, row.id);
+    }
+  } catch (_err) {
+    // Ignore
+  }
+
+  // Step 4: Create indexes safely after all columns exist
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_customers_user ON customers(user_id);
+    CREATE INDEX IF NOT EXISTS idx_invoices_user ON invoices(user_id);
+    CREATE INDEX IF NOT EXISTS idx_invoices_token ON invoices(public_token);
+    CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id);
+    CREATE INDEX IF NOT EXISTS idx_email_logs_invoice ON email_logs(invoice_id);
+  `);
 }
 
 function closeDatabase() {
