@@ -1,6 +1,7 @@
 const state = {
   user: null,
-  route: location.hash.replace("#", "") || "landing",
+  route: getInitialRoute(),
+  publicToken: getInitialPublicToken(),
   customers: [],
   invoices: [],
   business: null,
@@ -8,11 +9,27 @@ const state = {
   customerSearch: "",
   invoiceSearch: "",
   invoiceStatus: "",
-  modal: null // { type: 'customer' | 'send' | 'paid' | 'cancel', data: ... }
+  modal: null // { type: 'customer' | 'send' | 'paid' | 'cancel' | 'devEmails', data: ... }
 };
 
 const app = document.querySelector("#app");
 const toast = document.querySelector("#toast");
+
+function getInitialRoute() {
+  const path = location.pathname;
+  if (path.startsWith("/invoice/")) return "public-invoice";
+  const hash = location.hash.replace("#", "");
+  if (hash.startsWith("public-invoice-")) return "public-invoice";
+  return hash || "landing";
+}
+
+function getInitialPublicToken() {
+  const path = location.pathname;
+  if (path.startsWith("/invoice/")) return path.replace("/invoice/", "").split("/")[0];
+  const hash = location.hash.replace("#", "");
+  if (hash.startsWith("public-invoice-")) return hash.replace("public-invoice-", "");
+  return "";
+}
 
 function money(cents, currency = "ZAR") {
   const amount = (Number(cents) || 0) / 100;
@@ -55,21 +72,29 @@ function showToast(message) {
   setTimeout(() => toast.classList.remove("show"), 3400);
 }
 
-function navigate(route) {
+function navigate(route, token = "") {
   state.route = route;
-  location.hash = route;
+  state.publicToken = token;
+  if (route === "public-invoice" && token) {
+    location.hash = `public-invoice-${token}`;
+  } else {
+    location.hash = route;
+  }
   state.modal = null;
   render();
 }
 
 window.addEventListener("hashchange", () => {
-  state.route = location.hash.replace("#", "") || "landing";
+  state.route = getInitialRoute();
+  state.publicToken = getInitialPublicToken();
   state.modal = null;
   render();
 });
 
 function shell(content) {
+  if (state.route === "public-invoice") return content;
   if (!state.user) return `${publicNav()}${content}${renderModal()}`;
+  
   const tabs = [
     ["dashboard", "Dashboard"],
     ["invoices", "Invoices"],
@@ -84,6 +109,7 @@ function shell(content) {
         ${tabs.map(([id, label]) => `<button class="${state.route === id || (id === "invoices" && state.route.startsWith("invoice")) ? "active" : ""}" data-nav="${id}">${label}</button>`).join("")}
       </nav>
       <div class="userbar">
+        <button class="btn secondary small" id="btnDevEmails" title="Inspect recent development mock emails">📧 Dev Emails</button>
         <span>${escapeHtml(state.user.name)}</span>
         <button class="btn secondary small" id="logoutBtn">Log out</button>
       </div>
@@ -110,7 +136,7 @@ function landing() {
       <section class="hero">
         <div>
           <h1>Simple, Professional Invoicing for Modern Freelancers</h1>
-          <p>Create elegant invoices in seconds, download high-quality PDFs, track customer payments, and maintain effortless momentum without bloated accounting software.</p>
+          <p>Create elegant invoices in seconds, send secure public links to clients, download vector PDFs, track payments and invoice views effortlessly.</p>
           <div class="actions">
             <button class="btn primary" data-nav="register">Get Started Free</button>
             <button class="btn secondary" data-nav="login">Sign In</button>
@@ -139,12 +165,12 @@ function landing() {
         <div class="card">
           <h2>Free Plan</h2>
           <strong style="font-size:24px">R0 / month</strong>
-          <p class="muted" style="margin-top:8px">Clean document editor, customer directory, professional vector PDF exports, live preview, and payment tracking.</p>
+          <p class="muted" style="margin-top:8px">Clean document editor, customer directory, secure public client links, vector PDF exports, live preview, and payment tracking.</p>
         </div>
         <div class="card">
           <h2>Pro Plan</h2>
           <strong style="font-size:24px">Subscription</strong>
-          <p class="muted" style="margin-top:8px">Custom branding, multiple invoice templates, recurring invoice automation, and mock client email sending.</p>
+          <p class="muted" style="margin-top:8px">Custom branding, multiple invoice templates, email delivery tracking, view tracking, and recurring retainers.</p>
         </div>
       </section>
     </main>`;
@@ -155,7 +181,7 @@ function authView(mode) {
   return shell(`
     <section class="auth-panel card" style="max-width:440px; margin:48px auto;">
       <h1 style="font-size:24px; margin-bottom:8px">${isRegister ? "Create your account" : "Welcome back"}</h1>
-      <p class="muted" style="margin-bottom:20px">${isRegister ? "Sign up to start creating professional invoices." : "Enter your credentials to access your dashboard."}</p>
+      <p class="muted" style="margin-bottom:20px">${isRegister ? "Sign up to start creating and delivering professional invoices." : "Enter your credentials to access your dashboard."}</p>
       <form class="form" id="${mode}Form">
         ${isRegister ? field("name", "Full Name", "text", "", "e.g. Alex Morgan") : ""}
         ${field("email", "Email Address", "email", "", "name@business.com")}
@@ -543,9 +569,10 @@ function calculateClientInvoice() {
 }
 
 async function invoiceDetail(id) {
-  const [invoiceData, businessData] = await Promise.all([
+  const [invoiceData, businessData, linkData] = await Promise.all([
     api(`/invoices/${id}`),
-    api("/business")
+    api("/business"),
+    api(`/invoices/${id}/public-link`)
   ]);
 
   const invoice = invoiceData.invoice;
@@ -553,6 +580,7 @@ async function invoiceDetail(id) {
   const template = state.business.invoice_template || "clean";
   const accent = state.business.accent_color || "#2563eb";
   const curr = invoice.currency || "ZAR";
+  const publicUrl = linkData.publicUrl;
 
   const customer = {
     name: invoice.customer_name || "Valued Customer",
@@ -584,11 +612,43 @@ async function invoiceDetail(id) {
         ${!isPaid && !isCancelled ? `<button class="btn secondary" data-edit-invoice="${invoice.id}">Edit</button>` : ""}
         <button class="btn secondary" data-duplicate-invoice="${invoice.id}">Duplicate</button>
         <button class="btn secondary" data-pdf="${invoice.id}">Download PDF</button>
-        ${!isPaid && !isCancelled ? `<button class="btn secondary" data-open-send="${invoice.id}">Send Email</button>` : ""}
+        ${!isPaid && !isCancelled ? `<button class="btn secondary" data-open-send="${invoice.id}">${invoice.status === "sent" ? "Send Again" : "Send Email"}</button>` : ""}
         ${!isPaid && !isCancelled ? `<button class="btn primary" data-open-paid="${invoice.id}">Mark as Paid</button>` : ""}
         ${!isPaid && !isCancelled ? `<button class="btn danger" data-open-cancel="${invoice.id}">Cancel Invoice</button>` : ""}
       </div>
     </div>
+
+    <!-- Delivery & Client Access Section -->
+    <section class="delivery-panel">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="font-size:18px">🚀</span>
+          <strong>Delivery & Client Access</strong>
+        </div>
+        <div class="actions">
+          <button class="btn secondary small" data-copy-link="${publicUrl}">📋 Copy Public Link</button>
+          <a href="/invoice/${invoice.public_token}" target="_blank" class="btn secondary small">↗ View Client Page</a>
+        </div>
+      </div>
+      <div class="delivery-meta-grid">
+        <div class="delivery-meta-item">
+          <span>Delivery Status</span>
+          <strong>${invoice.delivery_status === "sent" ? "✅ Sent via Email" : (invoice.delivery_status === "failed" ? "❌ Failed Send Attempt" : "⏳ Not Sent Yet")}</strong>
+        </div>
+        <div class="delivery-meta-item">
+          <span>Last Sent</span>
+          <strong>${invoice.last_delivered_at ? new Date(invoice.last_delivered_at).toLocaleString() : "Never"}</strong>
+        </div>
+        <div class="delivery-meta-item">
+          <span>Client Views</span>
+          <strong>${invoice.view_count > 0 ? `👁️ Viewed ${invoice.view_count} time${invoice.view_count === 1 ? "" : "s"}` : "👁️ Not viewed yet"}</strong>
+        </div>
+        <div class="delivery-meta-item">
+          <span>Last Viewed</span>
+          <strong>${invoice.last_viewed_at ? new Date(invoice.last_viewed_at).toLocaleString() : "—"}</strong>
+        </div>
+      </div>
+    </section>
 
     <div class="preview-wrapper">
       <section class="preview template-${template}" style="--accent:${accent}">
@@ -660,6 +720,112 @@ async function invoiceDetail(id) {
     </div>`);
 }
 
+async function publicInvoiceView(token) {
+  try {
+    const data = await api(`/public/invoices/${token}`);
+    const { invoice, customer, business } = data;
+    const template = business.invoice_template || "clean";
+    const accent = business.accent_color || "#2563eb";
+    const curr = invoice.currency || "ZAR";
+
+    const items = invoice.items.map((item) => `
+      <tr>
+        <td><strong>${escapeHtml(item.description)}</strong></td>
+        <td>${item.quantity}</td>
+        <td>${money(item.unit_price_cents, curr)}</td>
+        <td>${item.tax_rate / 100}%</td>
+        <td style="text-align:right"><strong>${money(item.line_total_cents, curr)}</strong></td>
+      </tr>`).join("");
+
+    return `
+      <div class="public-view-container">
+        <header class="public-topbar">
+          <div class="public-brand"><span class="mark">IF</span> InvoiceFlow Client Portal</div>
+          <div class="actions">
+            <button class="btn secondary small" id="btnPrintPublic">🖨️ Print</button>
+            <a href="/api/public/invoices/${token}/pdf" target="_blank" class="btn primary small">📥 Download PDF</a>
+          </div>
+        </header>
+
+        <section class="preview template-${template}" style="--accent:${accent}; margin:0 auto;">
+          <div class="preview-header">
+            <div>
+              ${business.logo_data_url ? `<img src="${business.logo_data_url}" alt="Logo" class="preview-logo">` : `<div class="preview-logo-placeholder">${escapeHtml((business.business_name || "IF").slice(0, 2).toUpperCase())}</div>`}
+              <h2 style="margin:4px 0 0; font-size:20px">${escapeHtml(business.business_name || "InvoiceFlow Business")}</h2>
+              <div class="muted" style="font-size:13px; margin-top:4px">
+                ${[business.address, business.email, business.phone, business.website].filter(Boolean).map(escapeHtml).join("<br>")}
+                ${business.tax_number ? `<br>Tax/VAT: ${escapeHtml(business.tax_number)}` : ""}
+              </div>
+            </div>
+            <div style="text-align:right">
+              <div class="preview-title">INVOICE</div>
+              <strong style="font-size:16px">${escapeHtml(invoice.invoice_number)}</strong>
+              <div style="margin-top:8px; font-size:13px">
+                <div><strong>Issue Date:</strong> ${invoice.issue_date}</div>
+                <div><strong>Due Date:</strong> ${invoice.due_date}</div>
+                <div style="margin-top:6px"><span class="badge ${invoice.status}">${invoice.status}</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid two" style="margin-bottom:28px">
+            <div class="bill-box">
+              <span class="muted" style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em;">Bill To:</span>
+              <div style="font-size:16px; font-weight:700; margin-top:4px">${escapeHtml(customer.name)}</div>
+              <div class="muted" style="font-size:13px; margin-top:4px">
+                ${[customer.billing_address, customer.email, customer.phone].filter(Boolean).map(escapeHtml).join("<br>")}
+              </div>
+            </div>
+          </div>
+
+          <div class="table-wrap" style="box-shadow:none; border-color:#e2e8f0;">
+            <table>
+              <thead>
+                <tr><th>Description</th><th>Qty</th><th>Rate</th><th>Tax</th><th style="text-align:right">Amount</th></tr>
+              </thead>
+              <tbody>${items}</tbody>
+            </table>
+          </div>
+
+          <div class="totals" style="margin-top:24px;">
+            <div><span>Subtotal</span><strong>${money(invoice.subtotal_cents, curr)}</strong></div>
+            <div><span>Tax</span><strong>${money(invoice.tax_cents, curr)}</strong></div>
+            ${invoice.discount_cents > 0 ? `<div><span>Discount</span><strong>-${money(invoice.discount_cents, curr)}</strong></div>` : ""}
+            <div class="grand" style="border-top-color:var(--accent, #2563eb)"><span>Total Due</span><strong style="color:var(--accent, #2563eb)">${money(invoice.total_cents, curr)}</strong></div>
+          </div>
+
+          ${invoice.payments?.length ? `
+            <div style="margin-top:28px; background:#ecfdf5; border:1px solid #a7f3d0; border-radius:6px; padding:12px 16px;">
+              <strong style="color:#065f46">Payment Recorded</strong>
+              <div style="font-size:13px; color:#047857; margin-top:4px">
+                ${invoice.payments.map((p) => `${money(p.amount_cents, curr)} on ${p.payment_date} ${p.reference ? `(${escapeHtml(p.reference)})` : ""}`).join("<br>")}
+              </div>
+            </div>` : ""}
+
+          <div class="grid two" style="margin-top:36px; border-top:1px solid #e2e8f0; padding-top:20px; font-size:13px;">
+            <div>
+              <strong>Payment Instructions</strong>
+              <p class="muted" style="margin:4px 0 0; white-space:pre-line;">${escapeHtml(business.payment_details || "Please contact business owner for payment instructions.")}</p>
+            </div>
+            <div>
+              <strong>Terms & Notes</strong>
+              <p class="muted" style="margin:4px 0 0;">${escapeHtml([invoice.payment_terms, invoice.notes].filter(Boolean).join(" • ") || "Thank you for your business.")}</p>
+            </div>
+          </div>
+        </section>
+      </div>`;
+  } catch (err) {
+    return `
+      <div class="public-view-container">
+        <div class="card" style="max-width:480px; margin:60px auto; text-align:center;">
+          <h1 style="font-size:22px; color:var(--danger)">Invoice Not Found</h1>
+          <p class="muted">${escapeHtml(err.error?.message || "The invoice link you followed may be invalid or has expired.")}</p>
+          <a href="/" class="btn primary" style="margin-top:12px">Visit InvoiceFlow</a>
+        </div>
+      </div>`;
+  }
+}
+
 async function settingsView() {
   state.business = (await api("/business")).profile;
   const b = state.business;
@@ -667,7 +833,7 @@ async function settingsView() {
     <div class="section-title">
       <div>
         <h1>Business Settings & Branding</h1>
-        <p class="muted">Customize your company profile, invoice design templates, and defaults.</p>
+        <p class="muted">Customize your company profile, invoice design templates, and payment instructions.</p>
       </div>
     </div>
     
@@ -735,7 +901,8 @@ async function settingsView() {
         ${field("defaultTaxRate", "Default Tax Rate (%)", "number", b.default_tax_rate, "15")}
       </div>
       
-      ${textArea("paymentDetails", "Default Payment Instructions", b.payment_details, "Bank Name:\nAccount Number:\nBranch Code:\nReference format:")}
+      <h2 style="font-size:16px; margin-top:16px; margin-bottom:4px">Payment Instructions (Shown to Customers)</h2>
+      ${textArea("paymentDetails", "Payment / Banking Details", b.payment_details, "Bank: First National Bank\nAccount Holder: Acme Studio\nAccount Number: 6280000000\nBranch Code: 250655\nReference: Use Invoice #")}
       
       <div class="actions" style="margin-top:12px">
         <button class="btn primary">Save All Settings</button>
@@ -848,7 +1015,7 @@ function renderModal() {
             <button class="modal-close" data-close-modal aria-label="Close">✕</button>
           </div>
           <form class="form" id="modalSendForm" data-id="${data.id}">
-            <p class="muted" style="margin:0">Sending invoice <strong>${escapeHtml(data.invoice_number)}</strong> via mock email delivery service with attached PDF.</p>
+            <p class="muted" style="margin:0">Deliver invoice <strong>${escapeHtml(data.invoice_number)}</strong> with an attached vector PDF and secure customer link.</p>
             ${field("email", "Recipient Email Address *", "email", data.customer_email || "", "client@company.com")}
             <div class="actions" style="justify-content:flex-end; margin-top:12px">
               <button type="button" class="btn secondary" data-close-modal>Cancel</button>
@@ -903,11 +1070,45 @@ function renderModal() {
       </div>`;
   }
 
+  if (type === "devEmails") {
+    const emails = data.emails || [];
+    return `
+      <div class="modal-backdrop" id="modalBackdrop">
+        <div class="modal large" role="dialog" aria-modal="true">
+          <div class="modal-header">
+            <h2>Development Email Inspector</h2>
+            <button class="modal-close" data-close-modal aria-label="Close">✕</button>
+          </div>
+          <p class="muted" style="margin-top:0">All emails sent in local development mode (EMAIL_PROVIDER=mock) are captured here for inspection.</p>
+          <div style="display:grid; gap:16px; margin-top:12px;">
+            ${emails.length ? emails.map((em) => `
+              <div class="card" style="background:#f8fafc; font-size:13px;">
+                <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
+                  <strong>${escapeHtml(em.subject)}</strong>
+                  <span class="muted">${new Date(em.sentAt).toLocaleTimeString()}</span>
+                </div>
+                <div class="muted">To: ${escapeHtml(em.to)} • From: ${escapeHtml(em.from)}</div>
+                <div style="margin:10px 0; background:white; border:1px solid #e2e8f0; padding:10px; border-radius:6px; font-family:monospace; white-space:pre-wrap; font-size:12px; max-height:160px; overflow-y:auto;">${escapeHtml(em.textBody)}</div>
+                <div class="actions" style="margin-top:8px">
+                  <a href="${escapeHtml(em.publicUrl)}" target="_blank" class="btn secondary small">↗ Open Public Invoice Link</a>
+                </div>
+              </div>`).join("") : `<p class="empty">No mock emails sent yet.</p>`}
+          </div>
+        </div>
+      </div>`;
+  }
+
   return "";
 }
 
 async function render() {
   try {
+    if (state.route === "public-invoice") {
+      app.innerHTML = await publicInvoiceView(state.publicToken);
+      bindPublicEvents();
+      return;
+    }
+
     if (!state.user && !["landing", "login", "register"].includes(state.route)) {
       state.route = "login";
     }
@@ -948,6 +1149,10 @@ function showErrors(error) {
   showToast(error.error?.message || "Please check the highlighted fields.");
 }
 
+function bindPublicEvents() {
+  document.querySelector("#btnPrintPublic")?.addEventListener("click", () => window.print());
+}
+
 function bindEvents() {
   // Navigation
   document.querySelectorAll("[data-nav]").forEach((el) => el.addEventListener("click", () => navigate(el.dataset.nav)));
@@ -974,6 +1179,19 @@ function bindEvents() {
   document.querySelectorAll("[data-close-modal]").forEach((btn) => btn.addEventListener("click", () => {
     state.modal = null;
     render();
+  }));
+
+  // Dev emails modal
+  document.querySelector("#btnDevEmails")?.addEventListener("click", async () => {
+    const res = await api("/dev/emails");
+    state.modal = { type: "devEmails", data: res };
+    render();
+  });
+
+  // Copy link action
+  document.querySelectorAll("[data-copy-link]").forEach((btn) => btn.addEventListener("click", () => {
+    navigator.clipboard.writeText(btn.dataset.copyLink);
+    showToast("📋 Public invoice link copied to clipboard!");
   }));
 
   // Customer Management
@@ -1227,7 +1445,7 @@ async function submitModalSend(event) {
   const body = formData(event.target);
   try {
     const res = await api(`/invoices/${id}/send`, { method: "POST", body });
-    showToast(res.email?.message || "Invoice sent successfully via mock email.");
+    showToast(res.delivery?.message || "Invoice sent successfully via email.");
     state.modal = null;
     render();
   } catch (error) {

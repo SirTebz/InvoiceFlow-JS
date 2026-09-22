@@ -16,7 +16,14 @@ const config = {
   appUrl: process.env.APP_URL || "http://localhost:3000",
   email: {
     provider: process.env.EMAIL_PROVIDER || "mock",
-    from: process.env.EMAIL_FROM || "InvoiceFlow <invoices@example.test>"
+    from: process.env.EMAIL_FROM || "InvoiceFlow <invoices@example.test>",
+    smtp: {
+      host: process.env.SMTP_HOST || "localhost",
+      port: Number(process.env.SMTP_PORT || 587),
+      user: process.env.SMTP_USER || "",
+      pass: process.env.SMTP_PASSWORD || "",
+      secure: process.env.SMTP_SECURE === "true"
+    }
   },
   billing: {
     provider: process.env.BILLING_PROVIDER || "mock",

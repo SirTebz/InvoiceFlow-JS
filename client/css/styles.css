@@ -133,6 +133,19 @@ tbody tr:hover { background: #f8fafc; }
 /* Customer card in editor */
 .customer-info-card { background: #f8fafc; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px; font-size: 13px; margin-top: 8px; display: grid; gap: 4px; }
 
+/* Delivery & Activity Panel */
+.delivery-panel { background: #ffffff; border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; margin-bottom: 24px; box-shadow: var(--shadow-sm); display: grid; gap: 14px; }
+.delivery-meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; font-size: 13px; }
+.delivery-meta-item { display: grid; gap: 4px; }
+.delivery-meta-item span { color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.delivery-meta-item strong { color: var(--text-dark); font-size: 14px; }
+.public-link-box { display: flex; gap: 8px; align-items: center; background: #f8fafc; border: 1px solid #e2e8f0; padding: 6px 12px; border-radius: var(--radius-sm); font-size: 13px; word-break: break-all; }
+
+/* Public Customer Invoice Layout */
+.public-view-container { min-height: 100vh; background: #f1f5f9; padding: 24px 16px 60px; display: flex; flex-direction: column; align-items: center; }
+.public-topbar { width: min(840px, 100%); display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
+.public-brand { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 16px; color: var(--text-dark); }
+
 /* Templates & Invoice Preview */
 .preview-wrapper { background: #e2e8f0; padding: 28px; border-radius: var(--radius); margin-bottom: 24px; display: flex; justify-content: center; }
 .preview { width: 100%; max-width: 800px; background: white; border-radius: var(--radius-sm); padding: 48px; box-shadow: var(--shadow-lg); font-size: 14px; line-height: 1.5; color: #1e293b; }
@@ -158,6 +171,7 @@ tbody tr:hover { background: #f8fafc; }
 /* Modals */
 .modal-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(2px); display: grid; place-items: center; z-index: 100; padding: 16px; }
 .modal { background: white; border-radius: var(--radius-lg); width: min(540px, 100%); padding: 24px; box-shadow: var(--shadow-lg); animation: popIn 0.2s ease-out; }
+.modal.large { width: min(720px, 100%); max-height: 90vh; overflow-y: auto; }
 .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
 .modal-header h2 { margin: 0; font-size: 20px; font-weight: 800; }
 .modal-close { border: 0; background: transparent; font-size: 20px; color: var(--muted); padding: 4px 8px; border-radius: 4px; }
@@ -189,6 +203,14 @@ tbody tr:hover { background: #f8fafc; }
 /* Toast */
 .toast { position: fixed; right: 20px; bottom: 20px; max-width: 380px; background: #0f172a; color: white; padding: 14px 18px; border-radius: var(--radius-sm); opacity: 0; transform: translateY(12px); transition: all .2s cubic-bezier(0.16, 1, 0.3, 1); z-index: 150; box-shadow: var(--shadow-lg); font-size: 14px; font-weight: 500; }
 .toast.show { opacity: 1; transform: translateY(0); }
+
+/* Print Media Styling */
+@media print {
+  body { background: white !important; }
+  .topbar, .public-topbar, .actions, .delivery-panel, .btn, .toast, .modal-backdrop { display: none !important; }
+  .preview-wrapper, .public-view-container { background: white !important; padding: 0 !important; margin: 0 !important; }
+  .preview { box-shadow: none !important; border: 0 !important; max-width: 100% !important; padding: 0 !important; }
+}
 
 /* Responsive adjustments */
 @media (max-width: 860px) {

@@ -2,10 +2,11 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const config = require("./config");
 const { getDb, openDatabase } = require("./database/db");
 const { calculateInvoiceTotals, toCents, fromCents, basisPointsToPercent } = require("./utils/money");
 const { generateInvoicePdf } = require("./services/pdfService");
-const { sendInvoiceEmail } = require("./services/emailService");
+const { sendInvoiceEmail, getRecentMockEmails } = require("./services/emailService");
 const { ensureSubscription, getPlanConfig } = require("./services/billingService");
 
 const COOKIE_NAME = "invoiceflow_session";
@@ -40,6 +41,17 @@ async function handleApi(req, res, url) {
   const parts = url.pathname.replace(/^\/api\/?/, "").split("/").filter(Boolean);
   const db = getDb();
 
+  // Public Unauthenticated Routes
+  if (parts[0] === "public" && parts[1] === "invoices") {
+    return publicInvoiceRoute(req, res, db, parts);
+  }
+
+  // Development Emails Route
+  if (parts[0] === "dev" && parts[1] === "emails" && method === "GET") {
+    return json(res, 200, { emails: getRecentMockEmails() });
+  }
+
+  // Auth Routes
   if (method === "POST" && parts.join("/") === "auth/register") return register(req, res, body, db);
   if (method === "POST" && parts.join("/") === "auth/login") return login(req, res, body, db);
   if (method === "POST" && parts.join("/") === "auth/logout") return logout(req, res, db);
@@ -47,6 +59,7 @@ async function handleApi(req, res, url) {
 
   if (!req.user) return json(res, 401, { error: { message: "Please log in to continue." } });
 
+  // Protected Business Owner Routes
   if (method === "GET" && parts[0] === "business") return getBusiness(res, db, req.user.id);
   if (method === "PUT" && parts[0] === "business") return updateBusiness(res, db, req.user.id, body);
   if (parts[0] === "customers") return customersRoute(req, res, db, parts, body, url);
@@ -57,6 +70,106 @@ async function handleApi(req, res, url) {
     const subscription = ensureSubscription(req.user.id, db);
     return json(res, 200, { subscription, plan: getPlanConfig(subscription.plan) });
   }
+  return json(res, 404, { error: { message: "Not found." } });
+}
+
+function publicInvoiceRoute(req, res, db, parts) {
+  const token = String(parts[2] || "").trim();
+  const action = parts[3];
+
+  if (!token || token.length < 16) {
+    return json(res, 404, { error: { message: "Invoice not found or link is invalid." } });
+  }
+
+  const invoice = db.prepare(`
+    SELECT invoices.*, customers.name AS customer_name, customers.email AS customer_email,
+           customers.billing_address AS customer_billing_address, customers.phone AS customer_phone
+    FROM invoices
+    LEFT JOIN customers ON customers.id = invoices.customer_id
+    WHERE invoices.public_token = ?
+  `).get(token);
+
+  if (!invoice) {
+    return json(res, 404, { error: { message: "Invoice not found or link has expired." } });
+  }
+
+  invoice.status = invoiceStatus(invoice);
+  invoice.items = db.prepare("SELECT * FROM invoice_items WHERE invoice_id=? ORDER BY position, id").all(invoice.id);
+  invoice.payments = db.prepare("SELECT payment_date, amount_cents, reference FROM payments WHERE invoice_id=? ORDER BY payment_date DESC, id DESC").all(invoice.id);
+
+  const business = db.prepare("SELECT * FROM business_profiles WHERE user_id=?").get(invoice.user_id);
+
+  // Download PDF via public token
+  if (req.method === "GET" && action === "pdf") {
+    return generateInvoicePdf({ invoice, items: invoice.items, customer: invoice, business }).then((buffer) => {
+      res.writeHead(200, {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": `attachment; filename="${invoice.invoice_number}.pdf"`,
+        "Content-Length": buffer.length
+      });
+      res.end(buffer);
+    });
+  }
+
+  // Get Public Invoice JSON & Increment View Tracking
+  if (req.method === "GET" && !action) {
+    // Record view asynchronously
+    try {
+      db.prepare(`
+        UPDATE invoices
+        SET view_count = view_count + 1,
+            first_viewed_at = COALESCE(first_viewed_at, CURRENT_TIMESTAMP),
+            last_viewed_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(invoice.id);
+    } catch (_vErr) {
+      // Ignore view tracking error
+    }
+
+    // Return strictly sanitized data for customer view
+    return json(res, 200, {
+      invoice: {
+        invoice_number: invoice.invoice_number,
+        issue_date: invoice.issue_date,
+        due_date: invoice.due_date,
+        status: invoice.status,
+        currency: invoice.currency,
+        subtotal_cents: invoice.subtotal_cents,
+        tax_cents: invoice.tax_cents,
+        discount_cents: invoice.discount_cents,
+        total_cents: invoice.total_cents,
+        notes: invoice.notes,
+        payment_terms: invoice.payment_terms,
+        items: invoice.items.map((it) => ({
+          description: it.description,
+          quantity: it.quantity,
+          unit_price_cents: it.unit_price_cents,
+          tax_rate: it.tax_rate,
+          line_total_cents: it.line_total_cents
+        })),
+        payments: invoice.payments
+      },
+      customer: {
+        name: invoice.customer_name || "Valued Customer",
+        email: invoice.customer_email || "",
+        billing_address: invoice.customer_billing_address || "",
+        phone: invoice.customer_phone || ""
+      },
+      business: {
+        business_name: business.business_name || "InvoiceFlow Business",
+        email: business.email || "",
+        phone: business.phone || "",
+        address: business.address || "",
+        website: business.website || "",
+        tax_number: business.tax_number || "",
+        payment_details: business.payment_details || "",
+        invoice_template: business.invoice_template || "clean",
+        accent_color: business.accent_color || "#2563eb",
+        logo_data_url: business.logo_data_url || ""
+      }
+    });
+  }
+
   return json(res, 404, { error: { message: "Not found." } });
 }
 
@@ -100,7 +213,6 @@ function getBusiness(res, db, userId) {
 }
 
 function updateBusiness(res, db, userId, body) {
-  // Validate logoDataUrl if provided (limit max size e.g. 1MB data URI)
   const logo = String(body.logoDataUrl || "");
   if (logo && !logo.startsWith("data:image/") && logo.length > 2_000_000) {
     return bad(res, "Logo must be a valid image data URL under 2MB.", { logo: "Invalid image format" });
@@ -155,6 +267,7 @@ function customersRoute(req, res, db, parts, body, url) {
 async function invoicesRoute(req, res, db, parts, body, url) {
   const id = Number(parts[1]);
   const action = parts[2];
+
   if (req.method === "GET" && parts[1] === "next-number") return json(res, 200, { invoiceNumber: nextInvoiceNumber(db, req.user.id) });
   if (req.method === "GET" && !id) {
     const search = `%${String(url.searchParams.get("search") || "").trim()}%`;
@@ -164,20 +277,42 @@ async function invoicesRoute(req, res, db, parts, body, url) {
     return json(res, 200, { invoices });
   }
   if (req.method === "POST" && !id) return saveInvoice(res, db, req.user.id, body);
+
   const invoice = getInvoice(db, req.user.id, id);
   if (!invoice) return json(res, 404, { error: { message: "Invoice not found." } });
+
   if (req.method === "GET" && !action) return json(res, 200, { invoice });
   if (req.method === "PUT" && !action) return saveInvoice(res, db, req.user.id, body, invoice);
+
   if (req.method === "DELETE" || (req.method === "POST" && action === "cancel")) {
     if (invoice.status === "paid") return bad(res, "Paid invoices cannot be cancelled.");
     db.prepare("UPDATE invoices SET status='cancelled', cancelled_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(id, req.user.id);
     return json(res, 200, { success: true, invoice: getInvoice(db, req.user.id, id) });
   }
+
   if (req.method === "GET" && action === "pdf") return invoicePdf(req, res, db, invoice);
+  if (req.method === "GET" && action === "deliveries") {
+    const deliveries = db.prepare("SELECT * FROM email_logs WHERE invoice_id=? AND user_id=? ORDER BY sent_at DESC").all(invoice.id, req.user.id);
+    return json(res, 200, { deliveries });
+  }
+  if (req.method === "GET" && action === "public-link") {
+    const token = ensurePublicToken(db, invoice);
+    const publicUrl = `${config.appUrl}/invoice/${token}`;
+    return json(res, 200, { publicToken: token, publicUrl });
+  }
   if (req.method === "POST" && action === "send") return sendInvoice(req, res, db, invoice, body);
   if (req.method === "POST" && action === "mark-paid") return markPaid(req, res, db, invoice, body);
   if (req.method === "POST" && action === "duplicate") return duplicateInvoice(req, res, db, invoice);
+
   return json(res, 404, { error: { message: "Not found." } });
+}
+
+function ensurePublicToken(db, invoice) {
+  if (invoice.public_token) return invoice.public_token;
+  const token = crypto.randomBytes(24).toString("base64url");
+  db.prepare("UPDATE invoices SET public_token=? WHERE id=?").run(token, invoice.id);
+  invoice.public_token = token;
+  return token;
 }
 
 function saveInvoice(res, db, userId, body, existing) {
@@ -187,6 +322,7 @@ function saveInvoice(res, db, userId, body, existing) {
   
   const invoiceNumber = existing?.invoice_number || body.invoiceNumber || nextInvoiceNumber(db, userId);
   const status = body.status === "sent" ? "sent" : "draft";
+  const publicToken = existing?.public_token || crypto.randomBytes(24).toString("base64url");
 
   if (existing) {
     db.prepare("UPDATE invoices SET customer_id=?, issue_date=?, due_date=?, status=?, discount_cents=?, subtotal_cents=?, tax_cents=?, total_cents=?, notes=?, payment_terms=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(
@@ -206,7 +342,7 @@ function saveInvoice(res, db, userId, body, existing) {
     db.prepare("DELETE FROM invoice_items WHERE invoice_id=?").run(existing.id);
   } else {
     const isNext = invoiceNumber === nextInvoiceNumber(db, userId);
-    const result = db.prepare("INSERT INTO invoices (user_id, customer_id, invoice_number, issue_date, due_date, status, currency, discount_cents, subtotal_cents, tax_cents, total_cents, notes, payment_terms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+    const result = db.prepare("INSERT INTO invoices (user_id, customer_id, invoice_number, issue_date, due_date, status, currency, discount_cents, subtotal_cents, tax_cents, total_cents, notes, payment_terms, public_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
       userId,
       body.customerId || null,
       invoiceNumber,
@@ -219,7 +355,8 @@ function saveInvoice(res, db, userId, body, existing) {
       validation.totals.taxCents,
       validation.totals.totalCents,
       body.notes || "",
-      body.paymentTerms || ""
+      body.paymentTerms || "",
+      publicToken
     );
     existing = { id: result.lastInsertRowid };
     if (isNext) db.prepare("UPDATE business_profiles SET next_invoice_number=next_invoice_number+1 WHERE user_id=?").run(userId);
@@ -255,20 +392,49 @@ async function invoicePdf(req, res, db, invoice) {
 }
 
 async function sendInvoice(req, res, db, invoice, body) {
+  if (invoice.status === "cancelled") return bad(res, "Cancelled invoices cannot be sent.");
+  
   const to = body.email || invoice.customer_email;
-  if (!emailValid(to)) return bad(res, "Enter a valid recipient email.", { email: "Valid email required." });
+  if (!emailValid(to)) return bad(res, "Enter a valid recipient email address.", { email: "Valid email required." });
+
   const business = db.prepare("SELECT * FROM business_profiles WHERE user_id=?").get(req.user.id);
   const customer = db.prepare("SELECT * FROM customers WHERE id=? AND user_id=?").get(invoice.customer_id, req.user.id);
+  const publicToken = ensurePublicToken(db, invoice);
+  const publicUrl = `${config.appUrl}/invoice/${publicToken}`;
   const pdfBuffer = await generateInvoicePdf({ invoice, items: invoice.items, customer, business });
-  const email = await sendInvoiceEmail({ to, invoice, pdfBuffer });
-  db.prepare("UPDATE invoices SET status='sent', sent_at=COALESCE(sent_at, CURRENT_TIMESTAMP), updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=? AND status='draft'").run(invoice.id, req.user.id);
-  return json(res, 200, { email, invoice: getInvoice(db, req.user.id, invoice.id) });
+
+  try {
+    const delivery = await sendInvoiceEmail({
+      to,
+      invoice,
+      customer: customer || { name: invoice.customer_name },
+      business,
+      publicUrl,
+      pdfBuffer,
+      db,
+      userId: req.user.id
+    });
+
+    if (invoice.status === "draft") {
+      db.prepare("UPDATE invoices SET status='sent', sent_at=COALESCE(sent_at, CURRENT_TIMESTAMP), updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(invoice.id, req.user.id);
+    }
+
+    return json(res, 200, {
+      delivery,
+      email: delivery,
+      publicUrl,
+      invoice: getInvoice(db, req.user.id, invoice.id)
+    });
+  } catch (err) {
+    return bad(res, `Failed to send email: ${err.message}`);
+  }
 }
 
 function markPaid(req, res, db, invoice, body) {
-  if (invoice.status === "cancelled") return bad(res, "Cancelled invoices cannot be paid.");
+  if (invoice.status === "cancelled") return bad(res, "Cancelled invoices cannot be marked as paid.");
   const amountCents = toCents(body.amount || fromCents(invoice.total_cents));
   if (amountCents <= 0 || amountCents > invoice.total_cents) return bad(res, "Payment amount must be positive and no more than the invoice total.", { amount: "Invalid amount." });
+  
   db.prepare("INSERT INTO payments (user_id, invoice_id, payment_date, amount_cents, reference) VALUES (?, ?, ?, ?, ?)").run(
     req.user.id,
     invoice.id,
@@ -373,8 +539,9 @@ function getInvoice(db, userId, id) {
   const invoice = db.prepare("SELECT invoices.*, customers.name AS customer_name, customers.email AS customer_email, customers.billing_address AS customer_billing_address, customers.phone AS customer_phone FROM invoices LEFT JOIN customers ON customers.id=invoices.customer_id WHERE invoices.id=? AND invoices.user_id=?").get(id, userId);
   if (!invoice) return null;
   invoice.status = invoiceStatus(invoice);
-  invoice.items = db.prepare("SELECT * FROM invoice_items WHERE invoice_id=? ORDER BY position,id").all(id);
-  invoice.payments = db.prepare("SELECT * FROM payments WHERE invoice_id=? ORDER BY payment_date DESC,id DESC").all(id);
+  invoice.items = db.prepare("SELECT * FROM invoice_items WHERE invoice_id=? ORDER BY position, id").all(id);
+  invoice.payments = db.prepare("SELECT * FROM payments WHERE invoice_id=? ORDER BY payment_date DESC, id DESC").all(id);
+  invoice.deliveries = db.prepare("SELECT * FROM email_logs WHERE invoice_id=? ORDER BY sent_at DESC").all(id);
   return invoice;
 }
 
@@ -391,8 +558,13 @@ function invoiceStatus(invoice) {
 function serveStatic(_req, res, url) {
   const clientRoot = path.join(__dirname, "..", "client");
   const safePath = path.normalize(url.pathname).replace(/^(\.\.[/\\])+/, "");
+  
+  // Direct client routes like /invoice/:token or /login should serve index.html
   let filePath = path.join(clientRoot, safePath === "/" ? "index.html" : safePath);
-  if (!filePath.startsWith(clientRoot) || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) filePath = path.join(clientRoot, "index.html");
+  if (!filePath.startsWith(clientRoot) || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory() || safePath.startsWith("invoice/")) {
+    filePath = path.join(clientRoot, "index.html");
+  }
+  
   const ext = path.extname(filePath);
   const types = {
     ".html": "text/html; charset=utf-8",

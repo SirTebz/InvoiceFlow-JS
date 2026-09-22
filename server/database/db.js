@@ -24,6 +24,18 @@ function getDb() {
   return db;
 }
 
+function addColumnIfNotExists(database, tableName, columnName, columnDef) {
+  try {
+    const columns = database.prepare(`PRAGMA table_info(${tableName})`).all();
+    const exists = columns.some((col) => col.name === columnName);
+    if (!exists) {
+      database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDef}`);
+    }
+  } catch (_e) {
+    // Ignore migration error if already exists
+  }
+}
+
 function migrate() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -94,6 +106,12 @@ function migrate() {
       payment_terms TEXT DEFAULT '',
       sent_at TEXT,
       cancelled_at TEXT,
+      public_token TEXT UNIQUE,
+      first_viewed_at TEXT,
+      last_viewed_at TEXT,
+      view_count INTEGER NOT NULL DEFAULT 0,
+      delivery_status TEXT NOT NULL DEFAULT 'not_sent',
+      last_delivered_at TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(user_id, invoice_number)
@@ -120,6 +138,21 @@ function migrate() {
       amount_cents INTEGER NOT NULL,
       reference TEXT DEFAULT '',
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS email_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+      recipient_email TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      status TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      body_text TEXT,
+      body_html TEXT,
+      public_url TEXT,
+      error_message TEXT,
+      sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS recurring_invoices (
@@ -150,8 +183,18 @@ function migrate() {
 
     CREATE INDEX IF NOT EXISTS idx_customers_user ON customers(user_id);
     CREATE INDEX IF NOT EXISTS idx_invoices_user ON invoices(user_id);
+    CREATE INDEX IF NOT EXISTS idx_invoices_token ON invoices(public_token);
     CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id);
+    CREATE INDEX IF NOT EXISTS idx_email_logs_invoice ON email_logs(invoice_id);
   `);
+
+  // Ensure columns exist if table was already created in prior phases
+  addColumnIfNotExists(db, "invoices", "public_token", "TEXT");
+  addColumnIfNotExists(db, "invoices", "first_viewed_at", "TEXT");
+  addColumnIfNotExists(db, "invoices", "last_viewed_at", "TEXT");
+  addColumnIfNotExists(db, "invoices", "view_count", "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfNotExists(db, "invoices", "delivery_status", "TEXT NOT NULL DEFAULT 'not_sent'");
+  addColumnIfNotExists(db, "invoices", "last_delivered_at", "TEXT");
 }
 
 function closeDatabase() {
