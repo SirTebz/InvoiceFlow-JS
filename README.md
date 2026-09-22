@@ -16,18 +16,19 @@ InvoiceFlow is a lightweight invoicing MVP for freelancers, contractors, entrepr
 ## Stack
 
 - Frontend: HTML, CSS, vanilla JavaScript.
-- Backend: Node.js, Express.
+- Backend: Node.js built-in HTTP server.
 - Database: SQLite through Node's built-in `node:sqlite` module.
-- PDF: PDFKit.
-- Auth: bcrypt password hashing plus SQLite-backed session cookies.
+- PDF: Local lightweight PDF generator.
+- Auth: PBKDF2 password hashing plus SQLite-backed session cookies.
 
 ## Setup
 
 ```bash
-npm install
-cp .env.example .env
+copy .env.example .env
 npm run dev
 ```
+
+There are currently no external npm dependencies. If PowerShell blocks `npm`, use `npm.cmd`.
 
 Open `http://localhost:3000`.
 
@@ -46,7 +47,7 @@ See `.env.example` for available settings.
 npm test
 ```
 
-The tests cover authentication, customer CRUD, invoice calculations, payment status updates, ownership isolation, and recurring invoice status changes.
+The tests cover authentication, customer CRUD, invoice calculations, payment status updates, ownership isolation, PDF/mock email, search/filtering, and recurring invoice status changes.
 
 ## Production Notes
 

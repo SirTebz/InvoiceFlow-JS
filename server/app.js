@@ -70,7 +70,7 @@ async function register(req, res, body, db) {
   try {
     const passwordHash = await hashPassword(body.password);
     const result = db.prepare("INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)").run(body.name.trim(), body.email.trim().toLowerCase(), passwordHash);
-    db.prepare("INSERT INTO business_profiles (user_id, email) VALUES (?, ?)").run(result.lastInsertRowid, body.email.trim().toLowerCase());
+    db.prepare("INSERT INTO business_profiles (user_id, email, business_name) VALUES (?, ?, ?)").run(result.lastInsertRowid, body.email.trim().toLowerCase(), `${body.name.trim()}'s Studio`);
     ensureSubscription(result.lastInsertRowid, db);
     createSession(res, result.lastInsertRowid, db);
     return json(res, 200, { user: { id: result.lastInsertRowid, name: body.name.trim(), email: body.email.trim().toLowerCase() } });
@@ -100,10 +100,25 @@ function getBusiness(res, db, userId) {
 }
 
 function updateBusiness(res, db, userId, body) {
+  // Validate logoDataUrl if provided (limit max size e.g. 1MB data URI)
+  const logo = String(body.logoDataUrl || "");
+  if (logo && !logo.startsWith("data:image/") && logo.length > 2_000_000) {
+    return bad(res, "Logo must be a valid image data URL under 2MB.", { logo: "Invalid image format" });
+  }
+
   const values = [
-    body.businessName || "", body.logoDataUrl || "", body.email || "", body.phone || "", body.address || "", body.website || "",
-    body.taxNumber || "", String(body.currency || "ZAR").toUpperCase(), Math.max(0, Math.round(Number(body.defaultTaxRate || 0) * 100)),
-    body.paymentDetails || "", body.invoicePrefix || "INV-", Math.max(1, Number(body.nextInvoiceNumber || 1)),
+    body.businessName || "",
+    logo,
+    body.email || "",
+    body.phone || "",
+    body.address || "",
+    body.website || "",
+    body.taxNumber || "",
+    String(body.currency || "ZAR").toUpperCase(),
+    Math.max(0, Math.round(Number(body.defaultTaxRate || 0) * 100)),
+    body.paymentDetails || "",
+    body.invoicePrefix || "INV-",
+    Math.max(1, Number(body.nextInvoiceNumber || 1)),
     /^#[0-9a-f]{6}$/i.test(body.accentColor || "") ? body.accentColor : "#2563eb",
     ["clean", "professional", "minimal"].includes(body.invoiceTemplate) ? body.invoiceTemplate : "clean",
     userId
@@ -153,9 +168,10 @@ async function invoicesRoute(req, res, db, parts, body, url) {
   if (!invoice) return json(res, 404, { error: { message: "Invoice not found." } });
   if (req.method === "GET" && !action) return json(res, 200, { invoice });
   if (req.method === "PUT" && !action) return saveInvoice(res, db, req.user.id, body, invoice);
-  if (req.method === "DELETE") {
-    db.prepare("UPDATE invoices SET status='cancelled', cancelled_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=? AND status!='paid'").run(id, req.user.id);
-    return json(res, 200, { success: true });
+  if (req.method === "DELETE" || (req.method === "POST" && action === "cancel")) {
+    if (invoice.status === "paid") return bad(res, "Paid invoices cannot be cancelled.");
+    db.prepare("UPDATE invoices SET status='cancelled', cancelled_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(id, req.user.id);
+    return json(res, 200, { success: true, invoice: getInvoice(db, req.user.id, id) });
   }
   if (req.method === "GET" && action === "pdf") return invoicePdf(req, res, db, invoice);
   if (req.method === "POST" && action === "send") return sendInvoice(req, res, db, invoice, body);
@@ -168,16 +184,61 @@ function saveInvoice(res, db, userId, body, existing) {
   const validation = validateInvoice(body, db, userId);
   if (validation.fields) return bad(res, "We couldn't save the invoice. Please check the highlighted fields and try again.", validation.fields);
   if (existing && ["paid", "cancelled"].includes(existing.status)) return bad(res, "Paid or cancelled invoices cannot be edited.");
+  
   const invoiceNumber = existing?.invoice_number || body.invoiceNumber || nextInvoiceNumber(db, userId);
+  const status = body.status === "sent" ? "sent" : "draft";
+
   if (existing) {
-    db.prepare("UPDATE invoices SET customer_id=?, issue_date=?, due_date=?, status=?, discount_cents=?, subtotal_cents=?, tax_cents=?, total_cents=?, notes=?, payment_terms=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(body.customerId || null, body.issueDate, body.dueDate, body.status === "sent" ? "sent" : "draft", validation.totals.discountCents, validation.totals.subtotalCents, validation.totals.taxCents, validation.totals.totalCents, body.notes || "", body.paymentTerms || "", existing.id, userId);
+    db.prepare("UPDATE invoices SET customer_id=?, issue_date=?, due_date=?, status=?, discount_cents=?, subtotal_cents=?, tax_cents=?, total_cents=?, notes=?, payment_terms=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(
+      body.customerId || null,
+      body.issueDate,
+      body.dueDate,
+      status,
+      validation.totals.discountCents,
+      validation.totals.subtotalCents,
+      validation.totals.taxCents,
+      validation.totals.totalCents,
+      body.notes || "",
+      body.paymentTerms || "",
+      existing.id,
+      userId
+    );
     db.prepare("DELETE FROM invoice_items WHERE invoice_id=?").run(existing.id);
   } else {
-    const result = db.prepare("INSERT INTO invoices (user_id, customer_id, invoice_number, issue_date, due_date, status, currency, discount_cents, subtotal_cents, tax_cents, total_cents, notes, payment_terms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(userId, body.customerId || null, invoiceNumber, body.issueDate, body.dueDate, body.status === "sent" ? "sent" : "draft", validation.business.currency, validation.totals.discountCents, validation.totals.subtotalCents, validation.totals.taxCents, validation.totals.totalCents, body.notes || "", body.paymentTerms || "");
+    const isNext = invoiceNumber === nextInvoiceNumber(db, userId);
+    const result = db.prepare("INSERT INTO invoices (user_id, customer_id, invoice_number, issue_date, due_date, status, currency, discount_cents, subtotal_cents, tax_cents, total_cents, notes, payment_terms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+      userId,
+      body.customerId || null,
+      invoiceNumber,
+      body.issueDate,
+      body.dueDate,
+      status,
+      validation.business.currency || "ZAR",
+      validation.totals.discountCents,
+      validation.totals.subtotalCents,
+      validation.totals.taxCents,
+      validation.totals.totalCents,
+      body.notes || "",
+      body.paymentTerms || ""
+    );
     existing = { id: result.lastInsertRowid };
-    if (invoiceNumber === nextInvoiceNumber(db, userId)) db.prepare("UPDATE business_profiles SET next_invoice_number=next_invoice_number+1 WHERE user_id=?").run(userId);
+    if (isNext) db.prepare("UPDATE business_profiles SET next_invoice_number=next_invoice_number+1 WHERE user_id=?").run(userId);
   }
-  validation.totals.items.forEach((item) => db.prepare("INSERT INTO invoice_items (invoice_id, description, quantity, unit_price_cents, tax_rate, line_subtotal_cents, line_tax_cents, line_total_cents, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(existing.id, item.description, item.quantity, item.unitPriceCents, item.taxRate, item.lineSubtotalCents, item.lineTaxCents, item.lineTotalCents, item.position));
+
+  validation.totals.items.forEach((item) => {
+    db.prepare("INSERT INTO invoice_items (invoice_id, description, quantity, unit_price_cents, tax_rate, line_subtotal_cents, line_tax_cents, line_total_cents, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+      existing.id,
+      item.description,
+      item.quantity,
+      item.unitPriceCents,
+      item.taxRate,
+      item.lineSubtotalCents,
+      item.lineTaxCents,
+      item.lineTotalCents,
+      item.position
+    );
+  });
+
   return json(res, 200, { invoice: getInvoice(db, userId, existing.id) });
 }
 
@@ -185,7 +246,11 @@ async function invoicePdf(req, res, db, invoice) {
   const business = db.prepare("SELECT * FROM business_profiles WHERE user_id=?").get(req.user.id);
   const customer = db.prepare("SELECT * FROM customers WHERE id=? AND user_id=?").get(invoice.customer_id, req.user.id);
   const buffer = await generateInvoicePdf({ invoice, items: invoice.items, customer, business });
-  res.writeHead(200, { "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="${invoice.invoice_number}.pdf"` });
+  res.writeHead(200, {
+    "Content-Type": "application/pdf",
+    "Content-Disposition": `attachment; filename="${invoice.invoice_number}.pdf"`,
+    "Content-Length": buffer.length
+  });
   res.end(buffer);
 }
 
@@ -204,7 +269,13 @@ function markPaid(req, res, db, invoice, body) {
   if (invoice.status === "cancelled") return bad(res, "Cancelled invoices cannot be paid.");
   const amountCents = toCents(body.amount || fromCents(invoice.total_cents));
   if (amountCents <= 0 || amountCents > invoice.total_cents) return bad(res, "Payment amount must be positive and no more than the invoice total.", { amount: "Invalid amount." });
-  db.prepare("INSERT INTO payments (user_id, invoice_id, payment_date, amount_cents, reference) VALUES (?, ?, ?, ?, ?)").run(req.user.id, invoice.id, body.paymentDate || new Date().toISOString().slice(0, 10), amountCents, body.reference || "");
+  db.prepare("INSERT INTO payments (user_id, invoice_id, payment_date, amount_cents, reference) VALUES (?, ?, ?, ?, ?)").run(
+    req.user.id,
+    invoice.id,
+    body.paymentDate || new Date().toISOString().slice(0, 10),
+    amountCents,
+    body.reference || ""
+  );
   db.prepare("UPDATE invoices SET status='paid', updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(invoice.id, req.user.id);
   return json(res, 200, { invoice: getInvoice(db, req.user.id, invoice.id) });
 }
@@ -218,7 +289,12 @@ function duplicateInvoice(req, res, db, invoice) {
     discount: fromCents(invoice.discount_cents),
     notes: invoice.notes,
     paymentTerms: invoice.payment_terms,
-    items: invoice.items.map((item) => ({ description: item.description, quantity: item.quantity, unitPrice: fromCents(item.unit_price_cents), taxRate: basisPointsToPercent(item.tax_rate) }))
+    items: invoice.items.map((item) => ({
+      description: item.description,
+      quantity: item.quantity,
+      unitPrice: fromCents(item.unit_price_cents),
+      taxRate: basisPointsToPercent(item.tax_rate)
+    }))
   });
 }
 
@@ -226,7 +302,15 @@ function dashboard(res, db, userId) {
   const invoices = db.prepare("SELECT * FROM invoices WHERE user_id=? ORDER BY created_at DESC").all(userId).map((row) => ({ ...row, status: invoiceStatus(row) }));
   const month = new Date().toISOString().slice(0, 7);
   const paidThisMonth = db.prepare("SELECT COALESCE(SUM(amount_cents), 0) AS total FROM payments WHERE user_id=? AND substr(payment_date,1,7)=?").get(userId, month).total;
-  return json(res, 200, { metrics: { outstanding: invoices.filter((i) => ["sent", "overdue"].includes(i.status)).reduce((sum, i) => sum + i.total_cents, 0), paidThisMonth, overdue: invoices.filter((i) => i.status === "overdue").length, drafts: invoices.filter((i) => i.status === "draft").length }, recentInvoices: invoices.slice(0, 5) });
+  return json(res, 200, {
+    metrics: {
+      outstanding: invoices.filter((i) => ["sent", "overdue"].includes(i.status)).reduce((sum, i) => sum + i.total_cents, 0),
+      paidThisMonth,
+      overdue: invoices.filter((i) => i.status === "overdue").length,
+      drafts: invoices.filter((i) => i.status === "draft").length
+    },
+    recentInvoices: invoices.slice(0, 5)
+  });
 }
 
 function recurringRoute(req, res, db, parts, body) {
@@ -258,23 +342,35 @@ function validateInvoice(body, db, userId) {
   const fields = {};
   if (!body.issueDate) fields.issueDate = "Issue date is required.";
   if (!body.dueDate) fields.dueDate = "Due date is required.";
-  if (body.issueDate && body.dueDate && new Date(body.dueDate) < new Date(body.issueDate)) fields.dueDate = "Due date must be after issue date.";
+  if (body.issueDate && body.dueDate && new Date(body.dueDate) < new Date(body.issueDate)) fields.dueDate = "Due date must be on or after issue date.";
   if (body.customerId && !db.prepare("SELECT id FROM customers WHERE id=? AND user_id=? AND deleted_at IS NULL").get(body.customerId, userId)) fields.customerId = "Select one of your saved customers.";
+  
   const business = db.prepare("SELECT * FROM business_profiles WHERE user_id=?").get(userId);
   const rawItems = Array.isArray(body.items) ? body.items : [];
   if (!rawItems.length) fields.items = "Add at least one line item.";
+  
   rawItems.forEach((item, index) => {
     if (!String(item.description || "").trim()) fields[`items.${index}.description`] = "Description is required.";
-    if (Number(item.quantity) <= 0) fields[`items.${index}.quantity`] = "Quantity must be positive.";
-    if (Number(item.unitPrice) < 0) fields[`items.${index}.unitPrice`] = "Price cannot be negative.";
+    if (Number(item.quantity) <= 0 || isNaN(Number(item.quantity))) fields[`items.${index}.quantity`] = "Quantity must be positive.";
+    if (Number(item.unitPrice) < 0 || isNaN(Number(item.unitPrice))) fields[`items.${index}.unitPrice`] = "Price cannot be negative.";
   });
+
+  if (Number(body.discount || 0) < 0) {
+    fields.discount = "Discount cannot be negative.";
+  }
+
   if (Object.keys(fields).length) return { fields };
-  const items = rawItems.map((item) => ({ ...item, taxRate: item.taxRate === "" || item.taxRate == null ? basisPointsToPercent(business.default_tax_rate) : item.taxRate }));
+  
+  const items = rawItems.map((item) => ({
+    ...item,
+    taxRate: item.taxRate === "" || item.taxRate == null ? basisPointsToPercent(business.default_tax_rate) : item.taxRate
+  }));
+
   return { business, totals: calculateInvoiceTotals(items, toCents(body.discount || 0)) };
 }
 
 function getInvoice(db, userId, id) {
-  const invoice = db.prepare("SELECT invoices.*, customers.name AS customer_name, customers.email AS customer_email, customers.billing_address AS customer_billing_address FROM invoices LEFT JOIN customers ON customers.id=invoices.customer_id WHERE invoices.id=? AND invoices.user_id=?").get(id, userId);
+  const invoice = db.prepare("SELECT invoices.*, customers.name AS customer_name, customers.email AS customer_email, customers.billing_address AS customer_billing_address, customers.phone AS customer_phone FROM invoices LEFT JOIN customers ON customers.id=invoices.customer_id WHERE invoices.id=? AND invoices.user_id=?").get(id, userId);
   if (!invoice) return null;
   invoice.status = invoiceStatus(invoice);
   invoice.items = db.prepare("SELECT * FROM invoice_items WHERE invoice_id=? ORDER BY position,id").all(id);
@@ -284,7 +380,7 @@ function getInvoice(db, userId, id) {
 
 function nextInvoiceNumber(db, userId) {
   const profile = db.prepare("SELECT invoice_prefix,next_invoice_number FROM business_profiles WHERE user_id=?").get(userId);
-  return `${profile.invoice_prefix}${String(profile.next_invoice_number).padStart(4, "0")}`;
+  return `${profile.invoice_prefix || "INV-"}${String(profile.next_invoice_number || 1).padStart(4, "0")}`;
 }
 
 function invoiceStatus(invoice) {
@@ -298,7 +394,14 @@ function serveStatic(_req, res, url) {
   let filePath = path.join(clientRoot, safePath === "/" ? "index.html" : safePath);
   if (!filePath.startsWith(clientRoot) || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) filePath = path.join(clientRoot, "index.html");
   const ext = path.extname(filePath);
-  const types = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml" };
+  const types = {
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg"
+  };
   res.writeHead(200, { "Content-Type": types[ext] || "application/octet-stream" });
   fs.createReadStream(filePath).pipe(res);
 }
@@ -307,8 +410,17 @@ function readJson(req) {
   return new Promise((resolve, reject) => {
     if (!["POST", "PUT", "PATCH"].includes(req.method)) return resolve({});
     let data = "";
-    req.on("data", (chunk) => { data += chunk; if (data.length > 5_000_000) req.destroy(); });
-    req.on("end", () => { try { resolve(data ? JSON.parse(data) : {}); } catch (error) { reject(error); } });
+    req.on("data", (chunk) => {
+      data += chunk;
+      if (data.length > 5_000_000) req.destroy();
+    });
+    req.on("end", () => {
+      try {
+        resolve(data ? JSON.parse(data) : {});
+      } catch (error) {
+        reject(error);
+      }
+    });
     req.on("error", reject);
   });
 }

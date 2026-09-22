@@ -1,11 +1,11 @@
 # InvoiceFlow Architecture
 
-InvoiceFlow is a small Express application with a vanilla JavaScript single-page frontend. The backend owns authentication, authorization, financial calculations, PDF generation, mock email sending, subscription state, and SQLite persistence.
+InvoiceFlow is a small Node.js built-in HTTP application with a vanilla JavaScript single-page frontend. The backend owns authentication, authorization, financial calculations, PDF generation, mock email sending, subscription state, and SQLite persistence.
 
 ## Main Parts
 
 - `client/` contains the browser UI, styles, and single-page app logic.
-- `server/routes/api.js` exposes the REST API.
+- `server/app.js` exposes the REST API and serves the frontend.
 - `server/database/db.js` owns the reproducible SQLite schema.
 - `server/utils/money.js` handles cents-based invoice calculations.
 - `server/services/pdfService.js` creates invoice PDFs locally.

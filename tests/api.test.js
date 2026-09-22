@@ -42,7 +42,7 @@ async function createCustomer(api, name = "Acme Ltd") {
 }
 
 async function createInvoice(api, customerId) {
-  const result = await api("/api/invoices", { method: "POST", body: { customerId, issueDate: "2026-09-01", dueDate: "2026-10-01", discount: 500, notes: "Thank you", paymentTerms: "Payment due within 30 days.", items: [{ description: "Website Development", quantity: 1, unitPrice: 8000, taxRate: 15 }, { description: "Hosting", quantity: 2, unitPrice: 500, taxRate: 15 }] } });
+  const result = await api("/api/invoices", { method: "POST", body: { customerId, issueDate: "2026-09-01", dueDate: "2026-10-01", discount: 300, notes: "Thank you", paymentTerms: "Payment due within 30 days.", items: [{ description: "Website Development", quantity: 1, unitPrice: 5000, taxRate: 15 }, { description: "Hosting", quantity: 2, unitPrice: 500, taxRate: 15 }] } });
   assert.equal(result.response.status, 200);
   return result.data.invoice;
 }
@@ -71,17 +71,68 @@ test("invoice totals are recalculated server-side and payment marks invoice paid
   await register(api);
   const customer = await createCustomer(api);
   const invoice = await createInvoice(api, customer.id);
-  assert.equal(invoice.subtotal_cents, 900000);
-  assert.equal(invoice.tax_cents, 135000);
-  assert.equal(invoice.discount_cents, 50000);
-  assert.equal(invoice.total_cents, 985000);
+  assert.equal(invoice.subtotal_cents, 600000);
+  assert.equal(invoice.tax_cents, 90000);
+  assert.equal(invoice.discount_cents, 30000);
+  assert.equal(invoice.total_cents, 660000);
   const paid = await api(`/api/invoices/${invoice.id}/mark-paid`, { method: "POST", body: { reference: "EFT" } });
   assert.equal(paid.response.status, 200);
   assert.equal(paid.data.invoice.status, "paid");
   assert.equal(paid.data.invoice.payments.length, 1);
 }));
 
-test("users cannot access another user's invoices", () => withServer(async (api) => {
+test("invoice duplication and cancellation workflow", () => withServer(async (api) => {
+  await register(api);
+  const customer = await createCustomer(api);
+  const invoice = await createInvoice(api, customer.id);
+  
+  // Duplicate
+  const dup = await api(`/api/invoices/${invoice.id}/duplicate`, { method: "POST" });
+  assert.equal(dup.response.status, 200);
+  assert.equal(dup.data.invoice.status, "draft");
+  assert.notEqual(dup.data.invoice.id, invoice.id);
+  assert.equal(dup.data.invoice.total_cents, invoice.total_cents);
+  assert.equal(dup.data.invoice.items.length, 2);
+
+  // Cancel duplicate
+  const cancel = await api(`/api/invoices/${dup.data.invoice.id}/cancel`, { method: "POST" });
+  assert.equal(cancel.response.status, 200);
+  assert.equal(cancel.data.invoice.status, "cancelled");
+
+  // Cannot mark cancelled invoice as paid
+  const payCancelled = await api(`/api/invoices/${dup.data.invoice.id}/mark-paid`, { method: "POST", body: {} });
+  assert.equal(payCancelled.response.status, 400);
+}));
+
+test("business settings & branding update persists template, accent color and prefix", () => withServer(async (api) => {
+  await register(api);
+  const update = await api("/api/business", {
+    method: "PUT",
+    body: {
+      businessName: "Teboho Digital Studio",
+      email: "test@example.com",
+      phone: "+27 11 123 4567",
+      address: "123 Long St",
+      website: "https://example.com",
+      currency: "ZAR",
+      defaultTaxRate: 15,
+      invoicePrefix: "TDS-",
+      accentColor: "#059669",
+      invoiceTemplate: "professional",
+      paymentDetails: "Bank: FNB\nAcc: 987654321"
+    }
+  });
+  assert.equal(update.response.status, 200);
+  assert.equal(update.data.profile.business_name, "Teboho Digital Studio");
+  assert.equal(update.data.profile.invoice_prefix, "TDS-");
+  assert.equal(update.data.profile.accent_color, "#059669");
+  assert.equal(update.data.profile.invoice_template, "professional");
+
+  const nextNum = await api("/api/invoices/next-number");
+  assert.ok(nextNum.data.invoiceNumber.startsWith("TDS-"));
+}));
+
+test("users cannot access another user's invoices or customers", () => withServer(async (api) => {
   await register(api, "owner@example.com");
   const customer = await createCustomer(api);
   const invoice = await createInvoice(api, customer.id);
@@ -89,6 +140,7 @@ test("users cannot access another user's invoices", () => withServer(async (api)
   await register(api, "other@example.com");
   assert.equal((await api(`/api/invoices/${invoice.id}`)).response.status, 404);
   assert.equal((await api(`/api/invoices/${invoice.id}/mark-paid`, { method: "POST", body: {} })).response.status, 404);
+  assert.equal((await api(`/api/customers/${customer.id}`)).response.status, 404);
 }));
 
 test("recurring invoices support creation and pause", () => withServer(async (api) => {
