@@ -176,6 +176,19 @@ function migrate() {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS payment_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+      m_payment_id TEXT NOT NULL UNIQUE,
+      provider TEXT NOT NULL DEFAULT 'payfast',
+      expected_amount_cents INTEGER NOT NULL,
+      currency TEXT NOT NULL DEFAULT 'ZAR',
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
   // Step 2: Ensure any columns added in later phases are added before indexes
@@ -185,6 +198,21 @@ function migrate() {
   addColumnIfNotExists(db, "invoices", "view_count", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfNotExists(db, "invoices", "delivery_status", "TEXT NOT NULL DEFAULT 'not_sent'");
   addColumnIfNotExists(db, "invoices", "last_delivered_at", "TEXT");
+
+  // Phase 6: payments table provider fields
+  addColumnIfNotExists(db, "payments", "provider", "TEXT NOT NULL DEFAULT 'manual'");
+  addColumnIfNotExists(db, "payments", "provider_payment_id", "TEXT");
+  addColumnIfNotExists(db, "payments", "provider_ref", "TEXT");
+  addColumnIfNotExists(db, "payments", "payment_status", "TEXT NOT NULL DEFAULT 'completed'");
+  addColumnIfNotExists(db, "payments", "payment_method", "TEXT");
+  addColumnIfNotExists(db, "payments", "amount_gross_cents", "INTEGER");
+  addColumnIfNotExists(db, "payments", "completed_at", "TEXT");
+  addColumnIfNotExists(db, "payments", "raw_response", "TEXT");
+
+  // Phase 6: PayFast credentials on business_profiles (stored server-side only, never sent to client)
+  addColumnIfNotExists(db, "business_profiles", "payfast_merchant_id", "TEXT NOT NULL DEFAULT ''");
+  addColumnIfNotExists(db, "business_profiles", "payfast_merchant_key", "TEXT NOT NULL DEFAULT ''");
+  addColumnIfNotExists(db, "business_profiles", "payfast_passphrase", "TEXT NOT NULL DEFAULT ''");
 
   // Step 3: Backfill any existing invoices that are missing a public_token
   try {
@@ -204,7 +232,14 @@ function migrate() {
     CREATE INDEX IF NOT EXISTS idx_invoices_token ON invoices(public_token);
     CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id);
     CREATE INDEX IF NOT EXISTS idx_email_logs_invoice ON email_logs(invoice_id);
+    CREATE INDEX IF NOT EXISTS idx_payment_requests_ref ON payment_requests(m_payment_id);
+    CREATE INDEX IF NOT EXISTS idx_payment_requests_invoice ON payment_requests(invoice_id);
   `);
+
+  // Partial unique index for idempotency on provider_payment_id (SQLite supports WHERE clause)
+  try {
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_provider_id ON payments(provider_payment_id) WHERE provider_payment_id IS NOT NULL`);
+  } catch (_e) { /* ignore if already exists */ }
 }
 
 function closeDatabase() {

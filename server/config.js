@@ -28,6 +28,15 @@ const config = {
   billing: {
     provider: process.env.BILLING_PROVIDER || "mock",
     freePlanMonthlyInvoiceLimit: Number(process.env.FREE_PLAN_MONTHLY_INVOICE_LIMIT || 10)
+  },
+  payfast: {
+    sandbox: process.env.PAYFAST_SANDBOX !== "false", // default to sandbox in dev
+    checkoutUrl: process.env.PAYFAST_SANDBOX !== "false"
+      ? "https://sandbox.payfast.co.za/eng/process"
+      : "https://www.payfast.co.za/eng/process",
+    validateUrl: process.env.PAYFAST_SANDBOX !== "false"
+      ? "https://sandbox.payfast.co.za/eng/query/validate"
+      : "https://www.payfast.co.za/eng/query/validate"
   }
 };
 
