@@ -707,10 +707,18 @@ async function invoiceDetail(id) {
         </div>
 
         ${invoice.payments?.length ? `
-          <div style="margin-top:28px; background:#ecfdf5; border:1px solid #a7f3d0; border-radius:6px; padding:12px 16px;">
-            <strong style="color:#065f46">Payment Recorded</strong>
-            <div style="font-size:13px; color:#047857; margin-top:4px">
-              ${invoice.payments.map((p) => `${money(p.amount_cents, curr)} on ${p.payment_date} ${p.reference ? `(${escapeHtml(p.reference)})` : ""}`).join("<br>")}
+          <div style="margin-top:28px; background:#ecfdf5; border:1px solid #a7f3d0; border-radius:6px; padding:16px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+              <strong style="color:#065f46; font-size:15px">💳 Payment Verified & Recorded</strong>
+              <span class="badge paid">Paid</span>
+            </div>
+            <div style="font-size:13px; color:#047857; line-height:1.6">
+              ${invoice.payments.map((p) => `
+                <div>
+                  <strong>${money(p.amount_cents, curr)}</strong> received on <strong>${p.payment_date}</strong>
+                  ${p.provider === "payfast" ? ` • via <strong>PayFast</strong> (TXN: <code style="font-size:12px">${escapeHtml(p.provider_payment_id || p.reference || "N/A")}</code>)` : (p.reference ? ` • Ref: ${escapeHtml(p.reference)}` : "")}
+                  ${p.payment_method ? ` • Method: <span style="text-transform:capitalize">${escapeHtml(p.payment_method)}</span>` : ""}
+                </div>`).join("")}
             </div>
           </div>` : ""}
 
@@ -735,6 +743,42 @@ async function publicInvoiceView(token) {
     const template = business.invoice_template || "clean";
     const accent = business.accent_color || "#2563eb";
     const curr = invoice.currency || "ZAR";
+    const isPaid = invoice.status === "paid";
+    const isPayable = ["sent", "overdue"].includes(invoice.status);
+    const canPayOnline = isPayable && Boolean(business.has_online_payment);
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const paymentParam = urlParams.get("payment");
+
+    let paymentBannerHtml = "";
+    if (paymentParam === "success" && !isPaid) {
+      paymentBannerHtml = `
+        <div class="payment-banner processing">
+          <span style="font-size:20px">⏳</span>
+          <div>
+            <strong>Payment processing — confirmation pending</strong>
+            <div style="font-size:13px; margin-top:2px;">Your payment was submitted to PayFast and is being verified. Please refresh in a moment if your invoice status hasn't updated yet.</div>
+          </div>
+        </div>`;
+    } else if (paymentParam === "cancelled") {
+      paymentBannerHtml = `
+        <div class="payment-banner cancelled">
+          <span style="font-size:20px">⚠️</span>
+          <div>
+            <strong>Payment was cancelled</strong>
+            <div style="font-size:13px; margin-top:2px;">You cancelled the payment on PayFast. Your invoice remains active and you can try paying again whenever you're ready.</div>
+          </div>
+        </div>`;
+    } else if (isPaid) {
+      paymentBannerHtml = `
+        <div class="payment-banner success">
+          <span style="font-size:20px">✅</span>
+          <div>
+            <strong>Paid in Full</strong>
+            <div style="font-size:13px; margin-top:2px;">Payment has been received and verified. Thank you for your prompt payment!</div>
+          </div>
+        </div>`;
+    }
 
     const items = invoice.items.map((item) => `
       <tr>
@@ -750,10 +794,15 @@ async function publicInvoiceView(token) {
         <header class="public-topbar">
           <div class="public-brand"><span class="mark">IF</span> InvoiceFlow Client Portal</div>
           <div class="actions">
+            ${canPayOnline ? `<button class="btn primary small" id="btnPayOnline" data-token="${token}" style="background:#059669; border-color:#059669;">💳 Pay Online (${money(invoice.total_cents, curr)})</button>` : ""}
             <button class="btn secondary small" id="btnPrintPublic">🖨️ Print</button>
-            <a href="/api/public/invoices/${token}/pdf" target="_blank" class="btn primary small">📥 Download PDF</a>
+            <a href="/api/public/invoices/${token}/pdf" target="_blank" class="btn secondary small">📥 Download PDF</a>
           </div>
         </header>
+
+        <div style="max-width:800px; margin:0 auto 16px;">
+          ${paymentBannerHtml}
+        </div>
 
         <section class="preview template-${template}" style="--accent:${accent}; margin:0 auto;">
           <div class="preview-header">
@@ -802,18 +851,33 @@ async function publicInvoiceView(token) {
             <div class="grand" style="border-top-color:var(--accent, #2563eb)"><span>Total Due</span><strong style="color:var(--accent, #2563eb)">${money(invoice.total_cents, curr)}</strong></div>
           </div>
 
+          ${canPayOnline ? `
+            <div style="margin-top:28px; background:#f0fdf4; border:1px solid #86efac; border-radius:8px; padding:18px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+              <div>
+                <strong style="color:#166534; font-size:15px">💳 Secure Online Payment Available</strong>
+                <div style="font-size:13px; color:#15803d; margin-top:2px">Pay directly via Credit/Debit Card or Instant EFT with PayFast.</div>
+              </div>
+              <button class="btn primary" id="btnPayOnlineBottom" data-token="${token}" style="background:#059669; border-color:#059669;">Pay ${money(invoice.total_cents, curr)} Now</button>
+            </div>` : ""}
+
           ${invoice.payments?.length ? `
-            <div style="margin-top:28px; background:#ecfdf5; border:1px solid #a7f3d0; border-radius:6px; padding:12px 16px;">
-              <strong style="color:#065f46">Payment Recorded</strong>
-              <div style="font-size:13px; color:#047857; margin-top:4px">
-                ${invoice.payments.map((p) => `${money(p.amount_cents, curr)} on ${p.payment_date} ${p.reference ? `(${escapeHtml(p.reference)})` : ""}`).join("<br>")}
+            <div class="receipt-card">
+              <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #e2e8f0; padding-bottom:8px;">
+                <strong style="color:#0f172a; font-size:14px">🧾 Official Payment Receipt</strong>
+                <span class="badge paid">Verified</span>
+              </div>
+              <div class="receipt-grid">
+                <div><span class="muted">Amount Received</span><br><strong>${money(invoice.payments[0].amount_cents, curr)}</strong></div>
+                <div><span class="muted">Payment Date</span><br><strong>${invoice.payments[0].payment_date}</strong></div>
+                <div><span class="muted">Payment Method / Provider</span><br><strong>${escapeHtml(invoice.payments[0].provider === "payfast" ? "PayFast Secure Checkout" : (invoice.payments[0].reference || "Direct Payment"))}</strong></div>
+                <div><span class="muted">Payment Reference</span><br><strong style="font-family:monospace; font-size:12px;">${escapeHtml(invoice.payments[0].reference || "REF-" + invoice.invoice_number)}</strong></div>
               </div>
             </div>` : ""}
 
           <div class="grid two" style="margin-top:36px; border-top:1px solid #e2e8f0; padding-top:20px; font-size:13px;">
             <div>
-              <strong>Payment Instructions</strong>
-              <p class="muted" style="margin:4px 0 0; white-space:pre-line;">${escapeHtml(business.payment_details || "Please contact business owner for payment instructions.")}</p>
+              <strong>Payment Instructions (Offline EFT / Bank)</strong>
+              <p class="muted" style="margin:4px 0 0; white-space:pre-line;">${escapeHtml(business.payment_details || "Please contact business owner for manual banking instructions.")}</p>
             </div>
             <div>
               <strong>Terms & Notes</strong>
@@ -909,7 +973,19 @@ async function settingsView() {
         ${field("defaultTaxRate", "Default Tax Rate (%)", "number", b.default_tax_rate, "15")}
       </div>
       
-      <h2 style="font-size:16px; margin-top:16px; margin-bottom:4px">Payment Instructions (Shown to Customers)</h2>
+      <h2 style="font-size:16px; margin-top:16px; margin-bottom:4px">Online Payments (PayFast Integration)</h2>
+      <p class="muted" style="margin-top:0; font-size:13px;">Enable clients to pay ZAR invoices directly with Credit Card, Debit Card, or Instant EFT via PayFast.</p>
+      <div class="grid two">
+        ${field("payfastMerchantId", "PayFast Merchant ID", "text", b.payfast_merchant_id, "e.g. 10000100 (Sandbox default)")}
+        ${field("payfastMerchantKey", "PayFast Merchant Key", "text", b.payfast_merchant_key, "e.g. 46f0cd694581a (Sandbox default)")}
+      </div>
+      <div class="field">
+        <label for="payfastPassphrase">PayFast Passphrase / Salt</label>
+        <input id="payfastPassphrase" name="payfastPassphrase" type="password" placeholder="${b.has_payfast_passphrase ? "•••••••••••• (Passphrase saved - leave blank to keep)" : "Enter passphrase set in PayFast dashboard"}">
+        <span class="muted" style="font-size:12px; margin-top:2px;">Configured in your PayFast dashboard under <strong>Settings → Integration</strong>. Required for signature validation.</span>
+      </div>
+
+      <h2 style="font-size:16px; margin-top:16px; margin-bottom:4px">Manual Banking / Offline Instructions</h2>
       ${textArea("paymentDetails", "Payment / Banking Details", b.payment_details, "Bank: First National Bank\nAccount Holder: Acme Studio\nAccount Number: 6280000000\nBranch Code: 250655\nReference: Use Invoice #")}
       
       <div class="actions" style="margin-top:12px">
@@ -1159,6 +1235,42 @@ function showErrors(error) {
 
 function bindPublicEvents() {
   document.querySelector("#btnPrintPublic")?.addEventListener("click", () => window.print());
+
+  const handlePayClick = async (e) => {
+    const token = e.target.dataset.token || state.publicToken;
+    const btns = document.querySelectorAll("#btnPayOnline, #btnPayOnlineBottom");
+    btns.forEach((b) => { b.disabled = true; b.textContent = "Redirecting to PayFast..."; });
+
+    try {
+      const res = await api(`/public/invoices/${token}/pay`, { method: "POST" });
+      if (!res.actionUrl || !res.fields) {
+        throw new Error("Could not initialize PayFast session.");
+      }
+
+      // Build and auto-submit hidden PayFast checkout form
+      const form = document.createElement("form");
+      form.method = "POST";
+      form.action = res.actionUrl;
+      form.style.display = "none";
+
+      for (const [k, v] of Object.entries(res.fields)) {
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = k;
+        input.value = v;
+        form.appendChild(input);
+      }
+
+      document.body.appendChild(form);
+      form.submit();
+    } catch (err) {
+      showToast(err.error?.message || err.message || "Failed to start payment. Please try again.");
+      btns.forEach((b) => { b.disabled = false; b.textContent = "💳 Pay Online"; });
+    }
+  };
+
+  document.querySelector("#btnPayOnline")?.addEventListener("click", handlePayClick);
+  document.querySelector("#btnPayOnlineBottom")?.addEventListener("click", handlePayClick);
 }
 
 function bindEvents() {

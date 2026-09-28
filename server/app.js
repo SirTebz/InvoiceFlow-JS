@@ -8,6 +8,8 @@ const { calculateInvoiceTotals, toCents, fromCents, basisPointsToPercent } = req
 const { generateInvoicePdf } = require("./services/pdfService");
 const { sendInvoiceEmail, getRecentMockEmails } = require("./services/emailService");
 const { ensureSubscription, getPlanConfig } = require("./services/billingService");
+const { initiatePayment, handleNotification } = require("./services/paymentService");
+const payfast = require("./services/providers/payfastProvider");
 
 const COOKIE_NAME = "invoiceflow_session";
 
@@ -36,12 +38,41 @@ function setSecurityHeaders(res) {
 }
 
 async function handleApi(req, res, url) {
-  const body = await readJson(req);
+  const body = await readBody(req);
   const method = req.method;
   const parts = url.pathname.replace(/^\/api\/?/, "").split("/").filter(Boolean);
   const db = getDb();
 
-  // Public Unauthenticated Routes
+  // Public Unauthenticated ITN Notify Route (PayFast server-to-server webhook)
+  if (parts[0] === "payments" && parts[1] === "notify" && method === "POST") {
+    const rawBody = req.rawBody || "";
+    const itnResult = handleNotification(rawBody, db);
+    if (!itnResult.accepted) {
+      console.warn("[ITN Rejected]", itnResult.reason);
+      return json(res, 400, { error: { message: `ITN rejected: ${itnResult.reason}` } });
+    }
+    res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+    return res.end("OK");
+  }
+
+  // Development ITN Simulation Route (available in sandbox mode)
+  if (parts[0] === "dev" && parts[1] === "simulate-itn" && method === "POST") {
+    if (!config.payfast.sandbox) {
+      return json(res, 403, { error: { message: "Simulation endpoint is only available in sandbox mode." } });
+    }
+    let itnRaw = req.rawBody || "";
+    const contentType = String(req.headers["content-type"] || "");
+    if (typeof body === "object" && !contentType.includes("application/x-www-form-urlencoded")) {
+      itnRaw = Object.entries(body).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
+    }
+    const itnResult = handleNotification(itnRaw, db);
+    if (!itnResult.accepted) {
+      return json(res, 400, { success: false, reason: itnResult.reason });
+    }
+    return json(res, 200, { success: true, reason: itnResult.reason });
+  }
+
+  // Public Unauthenticated Invoice Routes
   if (parts[0] === "public" && parts[1] === "invoices") {
     return publicInvoiceRoute(req, res, db, parts);
   }
@@ -53,7 +84,7 @@ async function handleApi(req, res, url) {
   if (method === "GET" && parts.join("/") === "auth/me") {
     return json(res, 200, {
       user: req.user,
-      config: { isMockEmail: config.email.provider === "mock" }
+      config: { isMockEmail: config.email.provider === "mock", isSandboxPayfast: config.payfast.sandbox }
     });
   }
 
@@ -119,6 +150,44 @@ function publicInvoiceRoute(req, res, db, parts) {
     });
   }
 
+  // Initiate PayFast payment via public token
+  if (req.method === "POST" && action === "pay") {
+    try {
+      const result = initiatePayment({
+        invoice,
+        business,
+        customer: { name: invoice.customer_name, email: invoice.customer_email, phone: invoice.customer_phone },
+        db
+      });
+      return json(res, 200, result);
+    } catch (err) {
+      if (err.code === "NOT_PAYABLE") {
+        return bad(res, "This invoice cannot be paid at this time.");
+      }
+      if (err.code === "NO_PAYFAST_CREDENTIALS") {
+        return bad(res, "Online payment is not configured for this business.");
+      }
+      if (err.code === "UNSUPPORTED_CURRENCY") {
+        return bad(res, err.message);
+      }
+      console.error("Payment initiation error:", err);
+      return bad(res, "Could not initiate payment. Please try again later.");
+    }
+  }
+
+  // Get Payment Status via public token (for frontend polling / return verification)
+  if (req.method === "GET" && action === "payment-status") {
+    const currentStatus = invoiceStatus(invoice);
+    const payments = db.prepare("SELECT * FROM payments WHERE invoice_id=? ORDER BY payment_date DESC, id DESC").all(invoice.id);
+    const latestPaymentRequest = db.prepare("SELECT * FROM payment_requests WHERE invoice_id=? ORDER BY id DESC LIMIT 1").get(invoice.id);
+    return json(res, 200, {
+      status: currentStatus,
+      paid: currentStatus === "paid",
+      payments,
+      paymentRequest: latestPaymentRequest || null
+    });
+  }
+
   // Get Public Invoice JSON & Increment View Tracking
   if (req.method === "GET" && !action) {
     try {
@@ -132,6 +201,9 @@ function publicInvoiceRoute(req, res, db, parts) {
     } catch (_vErr) {
       // Ignore view tracking error
     }
+
+    const latestPaymentRequest = db.prepare("SELECT * FROM payment_requests WHERE invoice_id=? ORDER BY id DESC LIMIT 1").get(invoice.id);
+    const hasOnlinePayment = Boolean(business.payfast_merchant_id && business.payfast_merchant_key && (invoice.currency === "ZAR" || !invoice.currency));
 
     // Return strictly sanitized data for customer view (no internal password, user ID, or session data)
     return json(res, 200, {
@@ -154,7 +226,8 @@ function publicInvoiceRoute(req, res, db, parts) {
           tax_rate: it.tax_rate,
           line_total_cents: it.line_total_cents
         })),
-        payments: invoice.payments
+        payments: invoice.payments,
+        payment_request: latestPaymentRequest || null
       },
       customer: {
         name: invoice.customer_name || "Valued Customer",
@@ -172,7 +245,8 @@ function publicInvoiceRoute(req, res, db, parts) {
         payment_details: business.payment_details || "",
         invoice_template: business.invoice_template || "clean",
         accent_color: business.accent_color || "#2563eb",
-        logo_data_url: business.logo_data_url || ""
+        logo_data_url: business.logo_data_url || "",
+        has_online_payment: hasOnlinePayment
       }
     });
   }
@@ -227,7 +301,13 @@ function logout(req, res, db) {
 
 function getBusiness(res, db, userId) {
   const profile = db.prepare("SELECT * FROM business_profiles WHERE user_id = ?").get(userId);
-  return json(res, 200, { profile: { ...profile, default_tax_rate: basisPointsToPercent(profile.default_tax_rate) } });
+  if (!profile) return bad(res, "Business profile not found.");
+  const safeProfile = { ...profile };
+  delete safeProfile.payfast_passphrase;
+  safeProfile.has_payfast_passphrase = Boolean(profile.payfast_passphrase);
+  safeProfile.has_payfast = Boolean(profile.payfast_merchant_id && profile.payfast_merchant_key);
+  safeProfile.default_tax_rate = basisPointsToPercent(profile.default_tax_rate);
+  return json(res, 200, { profile: safeProfile });
 }
 
 function updateBusiness(res, db, userId, body) {
@@ -250,6 +330,14 @@ function updateBusiness(res, db, userId, body) {
   const accentColor = /^#[0-9a-f]{6}$/i.test(body.accentColor || "") ? body.accentColor : "#2563eb";
   const invoiceTemplate = ["clean", "professional", "minimal"].includes(body.invoiceTemplate) ? body.invoiceTemplate : "clean";
 
+  const existingProfile = db.prepare("SELECT * FROM business_profiles WHERE user_id=?").get(userId);
+  const payfastMerchantId = body.payfastMerchantId !== undefined ? String(body.payfastMerchantId || "").trim().slice(0, 50) : (existingProfile?.payfast_merchant_id || "");
+  const payfastMerchantKey = body.payfastMerchantKey !== undefined ? String(body.payfastMerchantKey || "").trim().slice(0, 100) : (existingProfile?.payfast_merchant_key || "");
+  let payfastPassphrase = existingProfile?.payfast_passphrase || "";
+  if (body.payfastPassphrase !== undefined && body.payfastPassphrase !== null) {
+    payfastPassphrase = String(body.payfastPassphrase || "").trim().slice(0, 100);
+  }
+
   const values = [
     businessName,
     logo,
@@ -265,9 +353,12 @@ function updateBusiness(res, db, userId, body) {
     nextInvoiceNumber,
     accentColor,
     invoiceTemplate,
+    payfastMerchantId,
+    payfastMerchantKey,
+    payfastPassphrase,
     userId
   ];
-  db.prepare(`UPDATE business_profiles SET business_name=?, logo_data_url=?, email=?, phone=?, address=?, website=?, tax_number=?, currency=?, default_tax_rate=?, payment_details=?, invoice_prefix=?, next_invoice_number=?, accent_color=?, invoice_template=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?`).run(...values);
+  db.prepare(`UPDATE business_profiles SET business_name=?, logo_data_url=?, email=?, phone=?, address=?, website=?, tax_number=?, currency=?, default_tax_rate=?, payment_details=?, invoice_prefix=?, next_invoice_number=?, accent_color=?, invoice_template=?, payfast_merchant_id=?, payfast_merchant_key=?, payfast_passphrase=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?`).run(...values);
   return getBusiness(res, db, userId);
 }
 
@@ -345,6 +436,11 @@ async function invoicesRoute(req, res, db, parts, body, url) {
   if (req.method === "GET" && action === "deliveries") {
     const deliveries = db.prepare("SELECT * FROM email_logs WHERE invoice_id=? AND user_id=? ORDER BY sent_at DESC").all(invoice.id, req.user.id);
     return json(res, 200, { deliveries });
+  }
+  if (req.method === "GET" && action === "payments") {
+    const payments = db.prepare("SELECT * FROM payments WHERE invoice_id=? AND user_id=? ORDER BY created_at DESC, id DESC").all(invoice.id, req.user.id);
+    const paymentRequests = db.prepare("SELECT * FROM payment_requests WHERE invoice_id=? AND user_id=? ORDER BY created_at DESC").all(invoice.id, req.user.id);
+    return json(res, 200, { payments, paymentRequests });
   }
   if (req.method === "GET" && action === "public-link") {
     const token = ensurePublicToken(db, invoice);
@@ -609,6 +705,7 @@ function getInvoice(db, userId, id) {
   invoice.status = invoiceStatus(invoice);
   invoice.items = db.prepare("SELECT * FROM invoice_items WHERE invoice_id=? ORDER BY position, id").all(id);
   invoice.payments = db.prepare("SELECT * FROM payments WHERE invoice_id=? ORDER BY payment_date DESC, id DESC").all(id);
+  invoice.payment_requests = db.prepare("SELECT * FROM payment_requests WHERE invoice_id=? ORDER BY created_at DESC").all(id);
   invoice.deliveries = db.prepare("SELECT * FROM email_logs WHERE invoice_id=? ORDER BY sent_at DESC").all(id);
   return invoice;
 }
@@ -645,23 +742,32 @@ function serveStatic(_req, res, url) {
   fs.createReadStream(filePath).pipe(res);
 }
 
-function readJson(req) {
+function readRawBody(req) {
   return new Promise((resolve, reject) => {
-    if (!["POST", "PUT", "PATCH"].includes(req.method)) return resolve({});
+    if (!["POST", "PUT", "PATCH"].includes(req.method)) return resolve("");
     let data = "";
     req.on("data", (chunk) => {
       data += chunk;
       if (data.length > 5_000_000) req.destroy();
     });
-    req.on("end", () => {
-      try {
-        resolve(data ? JSON.parse(data) : {});
-      } catch (error) {
-        reject(error);
-      }
-    });
+    req.on("end", () => resolve(data));
     req.on("error", reject);
   });
+}
+
+async function readBody(req) {
+  const raw = await readRawBody(req);
+  req.rawBody = raw;
+  if (!raw) return {};
+  const contentType = String(req.headers["content-type"] || "");
+  if (contentType.includes("application/x-www-form-urlencoded")) {
+    return payfast.parseFormBody(raw);
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (_e) {
+    return payfast.parseFormBody(raw);
+  }
 }
 
 function json(res, status, body) {
