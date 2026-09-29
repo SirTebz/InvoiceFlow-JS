@@ -189,6 +189,14 @@ function migrate() {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS recurring_invoice_generations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      recurring_invoice_id INTEGER NOT NULL REFERENCES recurring_invoices(id) ON DELETE CASCADE,
+      invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+      billing_period TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(recurring_invoice_id, billing_period)
+    );
   `);
 
   // Step 2: Ensure any columns added in later phases are added before indexes
@@ -234,6 +242,8 @@ function migrate() {
     CREATE INDEX IF NOT EXISTS idx_email_logs_invoice ON email_logs(invoice_id);
     CREATE INDEX IF NOT EXISTS idx_payment_requests_ref ON payment_requests(m_payment_id);
     CREATE INDEX IF NOT EXISTS idx_payment_requests_invoice ON payment_requests(invoice_id);
+    CREATE INDEX IF NOT EXISTS idx_recurring_generations_rec ON recurring_invoice_generations(recurring_invoice_id);
+    CREATE INDEX IF NOT EXISTS idx_recurring_generations_inv ON recurring_invoice_generations(invoice_id);
   `);
 
   // Partial unique index for idempotency on provider_payment_id (SQLite supports WHERE clause)

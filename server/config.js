@@ -37,7 +37,8 @@ const config = {
     validateUrl: process.env.PAYFAST_SANDBOX !== "false"
       ? "https://sandbox.payfast.co.za/eng/query/validate"
       : "https://www.payfast.co.za/eng/query/validate"
-  }
+  },
+  internalKey: process.env.INTERNAL_KEY || "dev-internal-key"
 };
 
 module.exports = config;

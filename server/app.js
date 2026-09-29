@@ -9,12 +9,17 @@ const { generateInvoicePdf } = require("./services/pdfService");
 const { sendInvoiceEmail, getRecentMockEmails } = require("./services/emailService");
 const { ensureSubscription, getPlanConfig } = require("./services/billingService");
 const { initiatePayment, handleNotification } = require("./services/paymentService");
+const { processDueRecurringInvoices } = require("./services/recurringService");
 const payfast = require("./services/providers/payfastProvider");
 
 const COOKIE_NAME = "invoiceflow_session";
 
 function createApp(options = {}) {
   if (options.databaseUrl) openDatabase(options.databaseUrl);
+  // Run due recurring invoice processing safely on startup
+  try {
+    processDueRecurringInvoices(getDb()).catch((err) => console.error("[Startup Recurring Error]", err));
+  } catch (_e) {}
   return http.createServer(handleRequest);
 }
 
@@ -42,6 +47,16 @@ async function handleApi(req, res, url) {
   const method = req.method;
   const parts = url.pathname.replace(/^\/api\/?/, "").split("/").filter(Boolean);
   const db = getDb();
+
+  // Internal Protected Recurring Processing Endpoint (Requires X-Internal-Key or query param)
+  if (parts[0] === "internal" && parts[1] === "recurring" && parts[2] === "process" && method === "POST") {
+    const providedKey = req.headers["x-internal-key"] || url.searchParams.get("key");
+    if (!providedKey || providedKey !== config.internalKey) {
+      return json(res, 401, { error: { message: "Unauthorized: Invalid or missing internal key." } });
+    }
+    const result = await processDueRecurringInvoices(db);
+    return json(res, 200, { success: true, ...result });
+  }
 
   // Public Unauthenticated ITN Notify Route (PayFast server-to-server webhook)
   if (parts[0] === "payments" && parts[1] === "notify" && method === "POST") {
@@ -632,10 +647,36 @@ function recurringRoute(req, res, db, parts, body) {
     const rows = db.prepare("SELECT recurring_invoices.*, customers.name AS customer_name FROM recurring_invoices LEFT JOIN customers ON customers.id=recurring_invoices.customer_id WHERE recurring_invoices.user_id=? ORDER BY next_invoice_date").all(req.user.id);
     return json(res, 200, { recurringInvoices: rows.map((row) => ({ ...row, payload: JSON.parse(row.payload_json) })) });
   }
+  if (req.method === "GET" && id) {
+    const row = db.prepare("SELECT recurring_invoices.*, customers.name AS customer_name, customers.email AS customer_email FROM recurring_invoices LEFT JOIN customers ON customers.id=recurring_invoices.customer_id WHERE recurring_invoices.id=? AND recurring_invoices.user_id=?").get(id, req.user.id);
+    if (!row) return json(res, 404, { error: { message: "Recurring invoice schedule not found." } });
+    const generations = db.prepare(`
+      SELECT rig.id, rig.billing_period, rig.created_at, inv.id AS invoice_id, inv.invoice_number, inv.total_cents, inv.status, inv.public_token
+      FROM recurring_invoice_generations rig
+      JOIN invoices inv ON inv.id = rig.invoice_id
+      WHERE rig.recurring_invoice_id = ?
+      ORDER BY rig.created_at DESC
+    `).all(id);
+    return json(res, 200, {
+      recurringInvoice: {
+        ...row,
+        payload: JSON.parse(row.payload_json),
+        generations
+      }
+    });
+  }
   if (req.method === "POST" && !id) {
-    if (!["weekly", "monthly", "quarterly", "yearly"].includes(body.frequency)) return bad(res, "Choose a supported frequency.", { frequency: "Invalid frequency." });
+    if (!["weekly", "monthly", "yearly"].includes(body.frequency)) return bad(res, "Choose a supported frequency (weekly, monthly, yearly).", { frequency: "Invalid frequency." });
     const customer = db.prepare("SELECT * FROM customers WHERE id=? AND user_id=? AND deleted_at IS NULL").get(body.customerId, req.user.id);
     if (!customer) return bad(res, "Select one of your saved customers.", { customerId: "Invalid customer." });
+    
+    // Ensure items are provided in the payload
+    const rawItems = Array.isArray(body.items) ? body.items : [];
+    if (!rawItems.length) {
+      // Default to a retainer item if not provided from basic UI
+      body.items = [{ description: body.title || "Retainer Services", quantity: 1, unitPrice: Number(body.amount || 1000) }];
+    }
+
     const result = db.prepare("INSERT INTO recurring_invoices (user_id, customer_id, title, frequency, start_date, next_invoice_date, end_date, status, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)").run(
       req.user.id,
       body.customerId,
@@ -649,9 +690,36 @@ function recurringRoute(req, res, db, parts, body) {
     return json(res, 200, { recurringInvoice: db.prepare("SELECT * FROM recurring_invoices WHERE id=?").get(result.lastInsertRowid) });
   }
   if (req.method === "PUT") {
-    if (!["active", "paused", "cancelled"].includes(body.status)) return bad(res, "Invalid recurring invoice status.", { status: "Invalid status." });
-    const result = db.prepare("UPDATE recurring_invoices SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(body.status, id, req.user.id);
-    return result.changes ? json(res, 200, { success: true }) : json(res, 404, { error: { message: "Recurring invoice not found." } });
+    const existing = db.prepare("SELECT * FROM recurring_invoices WHERE id=? AND user_id=?").get(id, req.user.id);
+    if (!existing) return json(res, 404, { error: { message: "Recurring invoice not found." } });
+
+    if (body.status && ["active", "paused", "cancelled", "completed"].includes(body.status)) {
+      db.prepare("UPDATE recurring_invoices SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(body.status, id, req.user.id);
+      return json(res, 200, { success: true, recurringInvoice: db.prepare("SELECT * FROM recurring_invoices WHERE id=?").get(id) });
+    }
+
+    // Schedule update (title, end_date, next_invoice_date if active)
+    const title = body.title ? String(body.title).slice(0, 150) : existing.title;
+    const endDate = body.endDate !== undefined ? (body.endDate || null) : existing.end_date;
+    const nextInvoiceDate = body.nextInvoiceDate || existing.next_invoice_date;
+
+    let payloadJson = existing.payload_json;
+    if (body.items || body.discount !== undefined || body.notes !== undefined) {
+      const currentPayload = JSON.parse(existing.payload_json);
+      const updatedPayload = { ...currentPayload, ...body };
+      payloadJson = JSON.stringify(updatedPayload);
+    }
+
+    db.prepare("UPDATE recurring_invoices SET title=?, end_date=?, next_invoice_date=?, payload_json=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(
+      title,
+      endDate,
+      nextInvoiceDate,
+      payloadJson,
+      id,
+      req.user.id
+    );
+
+    return json(res, 200, { success: true, recurringInvoice: db.prepare("SELECT * FROM recurring_invoices WHERE id=?").get(id) });
   }
   if (req.method === "DELETE") {
     const result = db.prepare("UPDATE recurring_invoices SET status='cancelled', updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(id, req.user.id);

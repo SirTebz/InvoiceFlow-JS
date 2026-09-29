@@ -12,6 +12,7 @@ InvoiceFlow is a lightweight, zero-dependency invoicing application for freelanc
 - **Client Public Portal & Online Payments**: Secure unauthenticated public URLs (`/invoice/<public_token>`) where clients can view invoices, pay directly via **PayFast** (Credit Card / Debit Card / Instant EFT), check offline banking instructions, copy links, print, or download official PDFs.
 - **Payment Verification & Security**: Provider-agnostic payment abstraction with full Instant Transaction Notification (ITN) webhook processing, MD5 signature verification, server-side amount & currency matching, and database-level idempotency protection.
 - **Delivery & Activity Tracking**: Track whether an invoice is *Not Sent*, *Sent*, or *Failed*, along with client view tracking (`first_viewed_at`, `last_viewed_at`, `view_count`).
+- **Recurring Invoices & Automated Billing**: Set up weekly, monthly, and yearly recurring schedules for retainer clients. Features idempotent automated invoice generation, leap-year and month-end date calculation, schedule advancement, automated notification emails, protected internal execution endpoint (`POST /api/internal/recurring/process`), and schedule generation history.
 - **Email Delivery Service**: Modular email abstraction supporting development mock email inspection (`/api/dev/emails`) and production SMTP delivery.
 - **Payments & Dashboard**: Verified payments update outstanding vs paid metrics, record transaction IDs, and reflect in invoice payment history.
 
@@ -36,4 +37,4 @@ Open `http://localhost:3000` in your browser.
 npm test
 ```
 
-Executes 34 automated tests covering authentication, customers, financial calculations, multi-page vector PDF generation, public client access, PayFast online payments, ITN signature and amount verification, idempotency, view tracking, delivery logging, server-side validation bounds, and security isolation.
+Executes 40 automated tests covering authentication, customers, financial calculations, multi-page vector PDF generation, public client access, PayFast online payments, ITN signature and amount verification, idempotency, recurring billing engine, leap year & month-end date transitions, schedule lifecycle, view tracking, delivery logging, server-side validation bounds, and security isolation.

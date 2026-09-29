@@ -15,6 +15,7 @@ InvoiceFlow is a lightweight, zero-dependency Node.js HTTP application with a va
 - `server/services/emailService.js`: Email delivery abstraction supporting local mock inspection and production SMTP configuration.
 - `server/services/paymentService.js`: Provider-agnostic payment abstraction handling payment requests and ITN webhook lifecycle.
 - `server/services/providers/payfastProvider.js`: PayFast Standard Checkout implementation (MD5 signature generation & verification, form builder, and ITN verification).
+- `server/services/recurringService.js`: Recurring billing engine: calendar interval math (weekly, monthly, yearly), idempotency enforcement via unique generation periods, invoice generation from templates, schedule advancement, and automated notification dispatch.
 - `server/services/billingService.js`: Plan limits and subscription architecture.
 
 ## Online Payments & Verification Architecture (Phase 6)
@@ -62,6 +63,43 @@ PaymentService
 
 ---
 
+## Recurring Invoices & Automated Billing Architecture (Phase 7)
+
+### 1. Architectural Model & Responsibilities
+
+Recurring invoicing in InvoiceFlow represents **scheduled generation of standard payable invoices**, not automated debit pulls or credit card charging. Each generated invoice is a standard InvoiceFlow invoice with a public token, PDF generation capability, and full PayFast payment portal functionality.
+
+```
+Cron / Worker / Server Startup
+           │
+           ▼
+POST /api/internal/recurring/process (Requires X-Internal-Key)
+           │
+           ▼
+recurringService.processDueRecurringInvoices(db)
+     ├── 1. Query active schedules where next_invoice_date <= today
+     ├── 2. Check recurring_invoice_generations for existing billing_period (Idempotency)
+     ├── 3. Create invoice with server-side totals, next invoice number & public token
+     ├── 4. Record generation in recurring_invoice_generations
+     ├── 5. Advance next_invoice_date (weekly, monthly, yearly with leap year / month-end clamping)
+     ├── 6. Check end_date condition (transition to 'completed' if reached)
+     └── 7. Dispatch client email (isolated try/catch; email error never rolls back invoice)
+```
+
+### 2. Idempotency & Database Integrity
+
+Idempotency is guaranteed at the SQLite database constraint level:
+- Table `recurring_invoice_generations`: `UNIQUE(recurring_invoice_id, billing_period)`.
+- If the background worker or endpoint is triggered multiple times on the same date, SQLite constraint prevents duplicate invoice creation.
+
+### 3. Calendar Math Rules
+
+- **Weekly**: `current_date + 7 days`.
+- **Monthly**: Clamped to month end (e.g., `2026-01-31` → `2026-02-28` in non-leap years, `2026-03-31` → `2026-04-30`).
+- **Yearly**: Leap-year aware (`2024-02-29` → `2025-02-28`).
+
+---
+
 ## Environment Variables
 
 | Variable | Description | Default |
@@ -77,3 +115,4 @@ PaymentService
 | `SMTP_PASSWORD` | SMTP password / secret | `""` |
 | `SMTP_SECURE` | Enable TLS wrapper (`true` / `false`) | `false` |
 | `PAYFAST_SANDBOX` | `true` for PayFast Sandbox (`https://sandbox.payfast.co.za`), `false` for live | `true` |
+| `INTERNAL_KEY` | Secret key for internal cron/processing endpoints (`X-Internal-Key`) | `dev-internal-key` |

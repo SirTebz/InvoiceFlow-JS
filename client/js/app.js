@@ -998,14 +998,17 @@ async function recurringView() {
   await loadCustomers({ useSearch: false });
   const rows = (await api("/recurring-invoices")).recurringInvoices.map((r) => `
     <tr>
-      <td><strong>${escapeHtml(r.title)}</strong></td>
+      <td><a href="#recurring/${r.id}" style="color:inherit; font-weight:700">${escapeHtml(r.title)}</a></td>
       <td>${escapeHtml(r.customer_name || "No customer")}</td>
       <td><span style="text-transform:capitalize">${r.frequency}</span></td>
       <td>${r.next_invoice_date}</td>
       <td><span class="badge ${r.status}">${r.status}</span></td>
       <td class="actions">
-        <button class="btn secondary small" data-rec-status="${r.id}" data-status="${r.status === "active" ? "paused" : "active"}">${r.status === "active" ? "Pause" : "Resume"}</button>
-        <button class="btn danger small" data-delete-rec="${r.id}">Cancel</button>
+        <a href="#recurring/${r.id}" class="btn secondary small">View</a>
+        ${r.status === "active" || r.status === "paused" ? `
+          <button class="btn secondary small" data-rec-status="${r.id}" data-status="${r.status === "active" ? "paused" : "active"}">${r.status === "active" ? "Pause" : "Resume"}</button>
+          <button class="btn danger small" data-delete-rec="${r.id}">Cancel</button>
+        ` : ""}
       </td>
     </tr>`).join("") || `<tr><td colspan="6" class="empty">No recurring invoices created yet.</td></tr>`;
 
@@ -1035,7 +1038,6 @@ async function recurringView() {
             <select id="frequency" name="frequency">
               <option value="weekly">Weekly</option>
               <option value="monthly" selected>Monthly</option>
-              <option value="quarterly">Quarterly</option>
               <option value="yearly">Yearly</option>
             </select>
           </div>
@@ -1056,6 +1058,74 @@ async function recurringView() {
         <tbody>${rows}</tbody>
       </table>
     </div>`);
+}
+
+async function recurringDetailView(id) {
+  const data = await api(`/recurring-invoices/${id}`);
+  const r = data.recurringInvoice;
+  const genRows = (r.generations || []).map((g) => `
+    <tr>
+      <td><a href="#invoice-${g.invoice_id}" style="font-weight:700">${escapeHtml(g.invoice_number)}</a></td>
+      <td>${g.billing_period}</td>
+      <td>${money(g.total_cents)}</td>
+      <td><span class="badge ${g.status}">${g.status}</span></td>
+      <td>${g.created_at.slice(0, 10)}</td>
+      <td class="actions">
+        <a href="#invoice-${g.invoice_id}" class="btn secondary small">Open Invoice</a>
+        <a href="/invoice/${g.public_token}" target="_blank" class="btn secondary small">Client Portal</a>
+      </td>
+    </tr>
+  `).join("") || `<tr><td colspan="6" class="empty">No invoices generated yet for this schedule.</td></tr>`;
+
+  return shell(`
+    <div class="section-title">
+      <div>
+        <p class="muted"><a href="#recurring" style="color:var(--primary); text-decoration:none">← Back to Recurring Invoices</a></p>
+        <h1 style="margin-top:4px">${escapeHtml(r.title)}</h1>
+      </div>
+      <div class="actions">
+        <span class="badge ${r.status}" style="font-size:14px; padding:4px 14px">${r.status}</span>
+        ${r.status === "active" || r.status === "paused" ? `
+          <button class="btn secondary" data-rec-status="${r.id}" data-status="${r.status === "active" ? "paused" : "active"}">${r.status === "active" ? "Pause Schedule" : "Resume Schedule"}</button>
+          <button class="btn danger" data-delete-rec="${r.id}">Cancel Schedule</button>
+        ` : ""}
+      </div>
+    </div>
+
+    <div class="grid two" style="margin-bottom:24px">
+      <section class="card">
+        <h2 style="font-size:16px; margin-bottom:14px">Schedule Details</h2>
+        <div style="display:grid; gap:10px; font-size:14px">
+          <div><span class="muted">Customer:</span> <strong>${escapeHtml(r.customer_name || "No customer")}</strong></div>
+          <div><span class="muted">Frequency:</span> <strong style="text-transform:capitalize">${r.frequency}</strong></div>
+          <div><span class="muted">Start Date:</span> <strong>${r.start_date}</strong></div>
+          <div><span class="muted">Next Invoice Date:</span> <strong>${r.next_invoice_date}</strong></div>
+          <div><span class="muted">End Date:</span> <strong>${r.end_date || "Continuous (No end date)"}</strong></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 style="font-size:16px; margin-bottom:14px">Edit Schedule</h2>
+        <form class="form" id="editRecurringForm" data-id="${r.id}">
+          ${field("title", "Schedule Title", "text", r.title)}
+          ${field("endDate", "End Date (Optional)", "date", r.end_date || "")}
+          <div class="actions" style="margin-top:4px">
+            <button class="btn primary small" type="submit">Save Changes</button>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <div class="section-title" style="margin-top:28px; margin-bottom:14px">
+      <h2>Generated Invoices (${(r.generations || []).length})</h2>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Invoice #</th><th>Billing Period</th><th>Amount</th><th>Status</th><th>Generated On</th><th>Actions</th></tr></thead>
+        <tbody>${genRows}</tbody>
+      </table>
+    </div>
+  `);
 }
 
 function renderModal() {
@@ -1205,6 +1275,7 @@ async function render() {
     else if (state.route.startsWith("invoice-edit-")) app.innerHTML = await invoiceEditor(state.route.replace("invoice-edit-", ""));
     else if (state.route.startsWith("invoice-")) app.innerHTML = await invoiceDetail(state.route.replace("invoice-", ""));
     else if (state.route === "settings") app.innerHTML = await settingsView();
+    else if (state.route.startsWith("recurring/")) app.innerHTML = await recurringDetailView(state.route.replace("recurring/", ""));
     else if (state.route === "recurring") app.innerHTML = await recurringView();
     
     bindEvents();
@@ -1509,6 +1580,17 @@ function bindEvents() {
 
   // Recurring Form
   document.querySelector("#recurringForm")?.addEventListener("submit", submitRecurring);
+  document.querySelector("#editRecurringForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const id = e.target.dataset.id;
+    try {
+      await api(`/recurring-invoices/${id}`, { method: "PUT", body: formData(e.target) });
+      showToast("Recurring schedule saved.");
+      render();
+    } catch (err) {
+      showErrors(err);
+    }
+  });
   document.querySelectorAll("[data-rec-status]").forEach((btn) => btn.addEventListener("click", async () => {
     await api(`/recurring-invoices/${btn.dataset.recStatus}`, { method: "PUT", body: { status: btn.dataset.status } });
     showToast("Recurring schedule updated.");

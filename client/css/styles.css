@@ -101,9 +101,10 @@ tbody tr:hover { background: #f8fafc; }
 .badge { display: inline-flex; min-height: 24px; align-items: center; border-radius: 999px; padding: 2px 10px; font-size: 12px; font-weight: 700; text-transform: capitalize; }
 .badge.draft { background: #f1f5f9; color: #475569; }
 .badge.sent { background: #eff6ff; color: #1d4ed8; }
-.badge.paid { background: var(--success-bg); color: var(--success); }
-.badge.overdue { background: var(--warning-bg); color: var(--warning); }
+.badge.paid, .badge.active { background: var(--success-bg); color: var(--success); }
+.badge.overdue, .badge.paused { background: var(--warning-bg); color: var(--warning); }
 .badge.cancelled { background: var(--danger-bg); color: var(--danger); }
+.badge.completed { background: #e0f2fe; color: #0369a1; }
 
 /* Hero / Landing */
 .hero { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 40px; align-items: center; min-height: calc(100vh - 120px); padding: 40px 0; }
