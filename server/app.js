@@ -12,7 +12,7 @@ const { initiatePayment, handleNotification } = require("./services/paymentServi
 const { processDueRecurringInvoices } = require("./services/recurringService");
 const payfast = require("./services/providers/payfastProvider");
 
-const COOKIE_NAME = "invoiceflow_session";
+const COOKIE_NAME = "quiktab_session";
 
 function createApp(options = {}) {
   if (options.databaseUrl) openDatabase(options.databaseUrl);
@@ -251,7 +251,7 @@ function publicInvoiceRoute(req, res, db, parts) {
         phone: invoice.customer_phone || ""
       },
       business: {
-        business_name: business.business_name || "InvoiceFlow Business",
+        business_name: business.business_name || "QuikTab Business",
         email: business.email || "",
         phone: business.phone || "",
         address: business.address || "",

@@ -5,7 +5,7 @@
  *   https://developers.payfast.co.za/docs
  *
  * All PayFast-specific logic is isolated here.
- * The rest of InvoiceFlow only interacts via paymentService.js.
+ * The rest of QuikTab only interacts via paymentService.js.
  *
  * Signature algorithm: MD5 of alphabetically sorted, URL-encoded
  * key=value pairs (excluding 'signature'), with passphrase appended.

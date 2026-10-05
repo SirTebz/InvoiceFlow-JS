@@ -1,6 +1,6 @@
-# InvoiceFlow Architecture
+# QuikTab Architecture
 
-InvoiceFlow is a lightweight, zero-dependency Node.js HTTP application with a vanilla JavaScript single-page frontend. The backend owns authentication, cross-user authorization, financial calculations in integer minor units (cents), vector PDF generation, email delivery abstractions, PayFast online payments, public client links, view tracking, and SQLite persistence.
+QuikTab is a lightweight, zero-dependency Node.js HTTP application with a vanilla JavaScript single-page frontend. The backend owns authentication, cross-user authorization, financial calculations in integer minor units (cents), vector PDF generation, email delivery abstractions, PayFast online payments, public client links, view tracking, and SQLite persistence.
 
 ## Main Architecture Layers
 
@@ -67,7 +67,7 @@ PaymentService
 
 ### 1. Architectural Model & Responsibilities
 
-Recurring invoicing in InvoiceFlow represents **scheduled generation of standard payable invoices**, not automated debit pulls or credit card charging. Each generated invoice is a standard InvoiceFlow invoice with a public token, PDF generation capability, and full PayFast payment portal functionality.
+Recurring invoicing in QuikTab represents **scheduled generation of standard payable invoices**, not automated debit pulls or credit card charging. Each generated invoice is a standard QuikTab invoice with a public token, PDF generation capability, and full PayFast payment portal functionality.
 
 ```
 Cron / Worker / Server Startup
@@ -105,10 +105,10 @@ Idempotency is guaranteed at the SQLite database constraint level:
 | Variable | Description | Default |
 | :--- | :--- | :--- |
 | `PORT` | HTTP server port | `3000` |
-| `DATABASE_URL` | SQLite database file path | `./data/invoiceflow.sqlite` |
+| `DATABASE_URL` | SQLite database file path | `./data/quiktab.sqlite` |
 | `APP_URL` | Base public URL for client links | `http://localhost:3000` |
 | `EMAIL_PROVIDER` | `mock` (development) or `smtp` (production) | `mock` |
-| `EMAIL_FROM` | Outgoing sender email address | `InvoiceFlow <invoices@example.test>` |
+| `EMAIL_FROM` | Outgoing sender email address | `QuikTab <invoices@example.test>` |
 | `SMTP_HOST` | Production SMTP hostname | `localhost` |
 | `SMTP_PORT` | Production SMTP port | `587` |
 | `SMTP_USER` | SMTP username / API key | `""` |

@@ -112,7 +112,7 @@ function shell(content) {
   ];
   return `
     <header class="topbar">
-      <div class="brand" data-nav="dashboard"><span class="mark">IF</span> InvoiceFlow</div>
+      <div class="brand" data-nav="dashboard"><span class="mark">QT</span> QuikTab</div>
       <nav class="nav">
         ${tabs.map(([id, label]) => `<button class="${state.route === id || (id === "invoices" && state.route.startsWith("invoice")) ? "active" : ""}" data-nav="${id}">${label}</button>`).join("")}
       </nav>
@@ -129,7 +129,7 @@ function shell(content) {
 function publicNav() {
   return `
     <header class="topbar">
-      <div class="brand" data-nav="landing"><span class="mark">IF</span> InvoiceFlow</div>
+      <div class="brand" data-nav="landing"><span class="mark">QT</span> QuikTab</div>
       <nav class="nav">
         <button data-nav="landing">Home</button>
         <button data-nav="login">Log in</button>
@@ -144,7 +144,7 @@ function landing() {
       <section class="hero">
         <div>
           <h1>Create invoices.<br>Send them to customers.<br>Track when they are paid.</h1>
-          <p>InvoiceFlow is simple invoicing software built for freelancers and small businesses. Create professional invoices in seconds, send secure public links to clients, and track payments without bloated accounting complexity.</p>
+          <p>QuikTab is simple invoicing software built for freelancers and small businesses. Create professional invoices in seconds, send secure public links to clients, and track payments without bloated accounting complexity.</p>
           <div class="actions">
             <button class="btn primary" data-nav="register">Get Started Free</button>
             <button class="btn secondary" data-nav="login">Sign In</button>
@@ -792,7 +792,7 @@ async function publicInvoiceView(token) {
     return `
       <div class="public-view-container">
         <header class="public-topbar">
-          <div class="public-brand"><span class="mark">IF</span> InvoiceFlow Client Portal</div>
+          <div class="public-brand"><span class="mark">QT</span> QuikTab Client Portal</div>
           <div class="actions">
             ${canPayOnline ? `<button class="btn primary small" id="btnPayOnline" data-token="${token}" style="background:#059669; border-color:#059669;">💳 Pay Online (${money(invoice.total_cents, curr)})</button>` : ""}
             <button class="btn secondary small" id="btnPrintPublic">🖨️ Print</button>
@@ -808,7 +808,7 @@ async function publicInvoiceView(token) {
           <div class="preview-header">
             <div>
               ${business.logo_data_url ? `<img src="${business.logo_data_url}" alt="Logo" class="preview-logo">` : `<div class="preview-logo-placeholder">${escapeHtml((business.business_name || "IF").slice(0, 2).toUpperCase())}</div>`}
-              <h2 style="margin:4px 0 0; font-size:20px">${escapeHtml(business.business_name || "InvoiceFlow Business")}</h2>
+              <h2 style="margin:4px 0 0; font-size:20px">${escapeHtml(business.business_name || "QuikTab Business")}</h2>
               <div class="muted" style="font-size:13px; margin-top:4px">
                 ${[business.address, business.email, business.phone, business.website].filter(Boolean).map(escapeHtml).join("<br>")}
                 ${business.tax_number ? `<br>Tax/VAT: ${escapeHtml(business.tax_number)}` : ""}
@@ -892,7 +892,7 @@ async function publicInvoiceView(token) {
         <div class="card" style="max-width:480px; margin:60px auto; text-align:center;">
           <h1 style="font-size:22px; color:var(--danger)">Invoice Not Found</h1>
           <p class="muted">${escapeHtml(err.error?.message || "The invoice link you followed may be invalid or has expired.")}</p>
-          <a href="/" class="btn primary" style="margin-top:12px">Visit InvoiceFlow</a>
+          <a href="/" class="btn primary" style="margin-top:12px">Visit QuikTab</a>
         </div>
       </div>`;
   }

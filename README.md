@@ -1,6 +1,6 @@
-# InvoiceFlow
+# QuikTab
 
-InvoiceFlow is a lightweight, zero-dependency invoicing application for freelancers, contractors, entrepreneurs, and small businesses. It helps users create professional invoices, send secure public links to clients, accept online payments via PayFast, track views and email deliveries, and record payments effortlessly.
+QuikTab is a lightweight, zero-dependency invoicing application for freelancers, contractors, entrepreneurs, and small businesses. It helps users create professional invoices, send secure public links to clients, accept online payments via PayFast, track views and email deliveries, and record payments effortlessly.
 
 ## Key Features
 

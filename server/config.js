@@ -11,12 +11,12 @@ if (fs.existsSync(envPath)) {
 
 const config = {
   port: Number(process.env.PORT || 3000),
-  databaseUrl: process.env.DATABASE_URL || "./data/invoiceflow.sqlite",
-  sessionSecret: process.env.SESSION_SECRET || "invoiceflow-dev-secret",
+  databaseUrl: process.env.DATABASE_URL || "./data/quiktab.sqlite",
+  sessionSecret: process.env.SESSION_SECRET || "quiktab-dev-secret",
   appUrl: process.env.APP_URL || "http://localhost:3000",
   email: {
     provider: process.env.EMAIL_PROVIDER || "mock",
-    from: process.env.EMAIL_FROM || "InvoiceFlow <invoices@example.test>",
+    from: process.env.EMAIL_FROM || "QuikTab <invoices@example.test>",
     smtp: {
       host: process.env.SMTP_HOST || "localhost",
       port: Number(process.env.SMTP_PORT || 587),

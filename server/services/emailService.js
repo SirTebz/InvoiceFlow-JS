@@ -78,7 +78,7 @@ ${business.email || ""} ${business.phone || ""}
     <p style="font-size:13px; color:#475569; margin-top:20px;">Or access your invoice directly at:<br><a href="${escapeHtml(publicUrl)}" style="color:#2563eb; word-break:break-all;">${escapeHtml(publicUrl)}</a></p>
 
     <div class="footer">
-      Sent with <strong>InvoiceFlow</strong> on behalf of ${escapeHtml(bizName)}.<br>
+      Sent with <strong>QuikTab</strong> on behalf of ${escapeHtml(bizName)}.<br>
       ${escapeHtml(business.email || "")} ${escapeHtml(business.phone ? `• ${business.phone}` : "")}
     </div>
   </div>

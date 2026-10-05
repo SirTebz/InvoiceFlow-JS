@@ -1,12 +1,12 @@
 {
-  "name": "invoiceflow-js",
+  "name": "quiktab",
   "version": "0.1.0",
-  "description": "InvoiceFlow MVP: simple invoicing for freelancers and small businesses.",
+  "description": "QuikTab: simple invoicing for freelancers and small businesses.",
   "main": "server/index.js",
   "scripts": {
-    "dev": "node --watch server/index.js",
-    "start": "node server/index.js",
-    "test": "node --test tests/*.test.js"
+    "dev": "node --watch --experimental-sqlite server/index.js",
+    "start": "node --experimental-sqlite server/index.js",
+    "test": "node --test --experimental-sqlite tests/*.test.js"
   },
   "dependencies": {},
   "devDependencies": {},
