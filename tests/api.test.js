@@ -41,8 +41,14 @@ async function createCustomer(api, name = "Acme Ltd") {
   return result.data.customer;
 }
 
+function futureDate(daysFromNow = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + daysFromNow);
+  return d.toISOString().slice(0, 10);
+}
+
 async function createInvoice(api, customerId) {
-  const result = await api("/api/invoices", { method: "POST", body: { customerId, issueDate: "2026-09-01", dueDate: "2026-10-01", discount: 300, notes: "Thank you", paymentTerms: "Payment due within 30 days.", items: [{ description: "Website Development", quantity: 1, unitPrice: 5000, taxRate: 15 }, { description: "Hosting", quantity: 2, unitPrice: 500, taxRate: 15 }] } });
+  const result = await api("/api/invoices", { method: "POST", body: { customerId, issueDate: futureDate(0), dueDate: futureDate(30), discount: 300, notes: "Thank you", paymentTerms: "Payment due within 30 days.", items: [{ description: "Website Development", quantity: 1, unitPrice: 5000, taxRate: 15 }, { description: "Hosting", quantity: 2, unitPrice: 500, taxRate: 15 }] } });
   assert.equal(result.response.status, 200);
   return result.data.invoice;
 }
@@ -146,7 +152,7 @@ test("users cannot access another user's invoices or customers", () => withServe
 test("recurring invoices support creation and pause", () => withServer(async (api) => {
   await register(api);
   const customer = await createCustomer(api);
-  const created = await api("/api/recurring-invoices", { method: "POST", body: { title: "Monthly retainer", customerId: customer.id, frequency: "monthly", startDate: "2026-09-01", nextInvoiceDate: "2026-10-01" } });
+  const created = await api("/api/recurring-invoices", { method: "POST", body: { title: "Monthly retainer", customerId: customer.id, frequency: "monthly", startDate: futureDate(0), nextInvoiceDate: futureDate(31) } });
   assert.equal(created.response.status, 200);
   assert.equal((await api(`/api/recurring-invoices/${created.data.recurringInvoice.id}`, { method: "PUT", body: { status: "paused" } })).response.status, 200);
   const list = await api("/api/recurring-invoices");

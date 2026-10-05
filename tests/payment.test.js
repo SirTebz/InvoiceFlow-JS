@@ -62,6 +62,12 @@ async function withServer(fn) {
   }
 }
 
+function futureDate(daysFromNow = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + daysFromNow);
+  return d.toISOString().slice(0, 10);
+}
+
 async function setupMerchant(api) {
   // 1. Register
   await api("/api/auth/register", {
@@ -98,8 +104,8 @@ async function setupMerchant(api) {
     method: "POST",
     body: {
       customerId,
-      issueDate: "2026-09-01",
-      dueDate: "2026-09-30",
+      issueDate: futureDate(0),
+      dueDate: futureDate(30),
       status: "sent",
       items: [{ description: "Design Consulting", quantity: 1, unitPrice: 2500, taxRate: 0 }]
     }
@@ -107,6 +113,7 @@ async function setupMerchant(api) {
   assert.equal(invRes.response.status, 200);
   return { invoice: invRes.data.invoice, customerId };
 }
+
 
 // ---------------------------------------------------------------------------
 // Unit tests for payfastProvider isolation
@@ -195,8 +202,8 @@ test("payments: cannot initiate payment on draft or cancelled invoice", () => wi
     method: "POST",
     body: {
       customerId: 1,
-      issueDate: "2026-09-01",
-      dueDate: "2026-09-30",
+      issueDate: futureDate(0),
+      dueDate: futureDate(30),
       status: "draft",
       items: [{ description: "Draft Item", quantity: 1, unitPrice: 100, taxRate: 0 }]
     }
@@ -343,7 +350,7 @@ test("payments: unconfigured business or non-ZAR invoice rejects payment initiat
   const cust = (await api("/api/customers", { method: "POST", body: { name: "Customer X" } })).data.customer;
   const inv = (await api("/api/invoices", {
     method: "POST",
-    body: { customerId: cust.id, issueDate: "2026-09-01", dueDate: "2026-09-30", status: "sent", items: [{ description: "Work", quantity: 1, unitPrice: 500, taxRate: 0 }] }
+    body: { customerId: cust.id, issueDate: futureDate(0), dueDate: futureDate(30), status: "sent", items: [{ description: "Work", quantity: 1, unitPrice: 500, taxRate: 0 }] }
   })).data.invoice;
 
   // Initiation fails because merchant has no PayFast credentials

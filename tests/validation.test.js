@@ -4,6 +4,12 @@ const { createApp } = require("../server/app");
 const { closeDatabase } = require("../server/database/db");
 const { generateInvoicePdf } = require("../server/services/pdfService");
 
+function futureDate(daysFromNow = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + daysFromNow);
+  return d.toISOString().slice(0, 10);
+}
+
 async function withServer(fn) {
   closeDatabase();
   const server = createApp({ databaseUrl: ":memory:" });
@@ -82,7 +88,7 @@ test("validation: rejects invalid registration, customer, and invoice payloads",
   // Invoice with no items
   const noItems = await api("/api/invoices", {
     method: "POST",
-    body: { customerId, issueDate: "2026-09-01", dueDate: "2026-09-15", items: [] }
+    body: { customerId, issueDate: futureDate(0), dueDate: futureDate(30), items: [] }
   });
   assert.equal(noItems.response.status, 400, "invoice with no items should be rejected");
 
@@ -91,8 +97,8 @@ test("validation: rejects invalid registration, customer, and invoice payloads",
     method: "POST",
     body: {
       customerId,
-      issueDate: "2026-09-01",
-      dueDate: "2026-09-15",
+      issueDate: futureDate(0),
+      dueDate: futureDate(30),
       items: [{ description: "Item", quantity: -5, unitPrice: 100, taxRate: 15 }]
     }
   });
@@ -107,7 +113,7 @@ test("validation: rejects invalid registration, customer, and invoice payloads",
   }));
   const excessRes = await api("/api/invoices", {
     method: "POST",
-    body: { customerId, issueDate: "2026-09-01", dueDate: "2026-09-15", items: excessiveItems }
+    body: { customerId, issueDate: futureDate(0), dueDate: futureDate(30), items: excessiveItems }
   });
   assert.equal(excessRes.response.status, 400, "105-item invoice should be rejected");
   assert.match(errText(excessRes.data), /100 line items/i);
@@ -121,7 +127,7 @@ test("validation: rejects invalid registration, customer, and invoice payloads",
   }));
   const validFifty = await api("/api/invoices", {
     method: "POST",
-    body: { customerId, issueDate: "2026-09-01", dueDate: "2026-09-15", discount: 50, notes: "Batch services", items: fiftyItems }
+    body: { customerId, issueDate: futureDate(0), dueDate: futureDate(30), discount: 50, notes: "Batch services", items: fiftyItems }
   });
   assert.equal(validFifty.response.status, 200, "50-item invoice should succeed");
   const inv = validFifty.data.invoice;

@@ -609,10 +609,17 @@ function markPaid(req, res, db, invoice, body) {
 }
 
 function duplicateInvoice(req, res, db, invoice) {
+  const issueDate = new Date().toISOString().slice(0, 10);
+  let dueDate = invoice.due_date;
+  if (new Date(dueDate) < new Date(issueDate)) {
+    const diffMs = Math.max(0, new Date(invoice.due_date) - new Date(invoice.issue_date));
+    const newDue = new Date(Date.now() + diffMs);
+    dueDate = newDue.toISOString().slice(0, 10);
+  }
   return saveInvoice(res, db, req.user.id, {
     customerId: invoice.customer_id,
-    issueDate: new Date().toISOString().slice(0, 10),
-    dueDate: invoice.due_date,
+    issueDate,
+    dueDate,
     status: "draft",
     discount: fromCents(invoice.discount_cents),
     notes: invoice.notes,

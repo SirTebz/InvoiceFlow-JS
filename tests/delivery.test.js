@@ -58,13 +58,19 @@ async function createCustomer(api, name = "Acme Corp") {
   return result.data.customer;
 }
 
+function futureDate(daysFromNow = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + daysFromNow);
+  return d.toISOString().slice(0, 10);
+}
+
 async function createInvoice(api, customerId) {
   const result = await api("/api/invoices", {
     method: "POST",
     body: {
       customerId,
-      issueDate: "2026-09-01",
-      dueDate: "2026-10-01",
+      issueDate: futureDate(0),
+      dueDate: futureDate(30),
       discount: 200,
       notes: "Thanks!",
       paymentTerms: "Net 30",
