@@ -720,6 +720,10 @@ async function guestInvoicePdfRoute(req, res, body) {
 
   const totals = calculateInvoiceTotals(items, toCents(body.discount || 0));
 
+  const status = ["final", "sent", "paid", "draft"].includes(String(body.status || "").toLowerCase())
+    ? String(body.status).toLowerCase()
+    : "final";
+
   const invoice = {
     invoice_number: String(body.invoiceNumber || "GUEST-0001").trim(),
     issue_date: body.issueDate,
@@ -731,24 +735,32 @@ async function guestInvoicePdfRoute(req, res, body) {
     total_cents: totals.totalCents,
     notes: String(body.notes || "").slice(0, 2000),
     payment_terms: String(body.paymentTerms || "").slice(0, 2000),
-    status: "draft"
+    status
   };
 
   const business = {
     business_name: String(body.businessName || "Invoice").trim(),
     business_email: String(body.businessEmail || "").trim(),
+    email: String(body.businessEmail || "").trim(),
     business_phone: String(body.businessPhone || "").trim(),
+    phone: String(body.businessPhone || "").trim(),
     business_address: String(body.businessAddress || "").trim(),
+    address: String(body.businessAddress || "").trim(),
     tax_number: String(body.taxNumber || "").trim(),
+    payment_details: String(body.paymentTerms || "").trim(),
     invoice_template: String(body.template || "clean"),
     accent_color: String(body.accentColor || "#2563eb")
   };
 
   const customer = {
     name: String(body.customerName || "Valued Customer").trim(),
+    customer_name: String(body.customerName || "Valued Customer").trim(),
     email: String(body.customerEmail || "").trim(),
+    customer_email: String(body.customerEmail || "").trim(),
     phone: String(body.customerPhone || "").trim(),
-    billing_address: String(body.customerAddress || "").trim()
+    customer_phone: String(body.customerPhone || "").trim(),
+    billing_address: String(body.customerAddress || "").trim(),
+    customer_billing_address: String(body.customerAddress || "").trim()
   };
 
   try {

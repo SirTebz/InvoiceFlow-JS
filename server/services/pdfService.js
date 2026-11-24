@@ -105,15 +105,18 @@ async function generateInvoicePdf({ invoice, items = [], customer = {}, business
       }
 
       // Business Branding / Header
-      const bizName = (business.business_name || "QuikTab Business").slice(0, 36);
+      const bizName = (business.business_name || "QuikTab Business").slice(0, 40);
       text(bizName, MARGIN_LEFT, curY - 5, 18, "/F2", [0.08, 0.1, 0.15]);
       
       let bizY = curY - 22;
+      const bizAddress = business.address || business.business_address;
+      const bizEmail = business.email || business.business_email;
+      const bizPhone = business.phone || business.business_phone;
       const bizDetails = [
-        business.address ? business.address.slice(0, 45) : null,
-        [business.email, business.phone].filter(Boolean).join(" • ").slice(0, 45),
-        business.website ? `Website: ${business.website.slice(0, 35)}` : null,
-        business.tax_number ? `Tax/VAT: ${business.tax_number.slice(0, 25)}` : null
+        bizAddress ? bizAddress.slice(0, 50) : null,
+        [bizEmail, bizPhone].filter(Boolean).join(" • ").slice(0, 50),
+        business.website ? `Website: ${business.website.slice(0, 40)}` : null,
+        business.tax_number ? `Tax/VAT: ${business.tax_number.slice(0, 30)}` : null
       ].filter(Boolean);
 
       bizDetails.forEach((lineText) => {
@@ -131,11 +134,21 @@ async function generateInvoicePdf({ invoice, items = [], customer = {}, business
       metaY -= 13;
       rightText(`Due Date: ${invoice.due_date || ""}`, PAGE_WIDTH - MARGIN_RIGHT, metaY, 9, "/F1", [0.35, 0.4, 0.45]);
       metaY -= 13;
-      const statusLabel = `Status: ${(invoice.status || "draft").toUpperCase()}`;
-      rightText(statusLabel, PAGE_WIDTH - MARGIN_RIGHT, metaY, 9, "/F2", invoice.status === "paid" ? [0.05, 0.55, 0.25] : [ar, ag, ab]);
+      
+      const rawStatus = (invoice.status || "final").toLowerCase();
+      const displayStatus = rawStatus === "sent" ? "FINAL" : rawStatus.toUpperCase();
+      const statusColor = ["paid", "resolved"].includes(rawStatus)
+        ? [0.05, 0.55, 0.25]
+        : rawStatus === "overdue"
+        ? [0.85, 0.2, 0.2]
+        : rawStatus === "draft"
+        ? [0.45, 0.5, 0.55]
+        : [ar, ag, ab];
+
+      rightText(`Status: ${displayStatus}`, PAGE_WIDTH - MARGIN_RIGHT, metaY, 9, "/F2", statusColor);
 
       // Divider line
-      curY = 675;
+      curY = Math.min(bizY - 8, 675);
       line(MARGIN_LEFT, curY, PAGE_WIDTH - MARGIN_RIGHT, curY, [0.88, 0.9, 0.93], 1);
 
       // Bill To & Payment Info Header
@@ -143,19 +156,22 @@ async function generateInvoicePdf({ invoice, items = [], customer = {}, business
       text("BILL TO", MARGIN_LEFT, curY, 9, "/F2", [ar, ag, ab]);
       
       let custY = curY - 14;
-      const custName = (customer.name || "Valued Customer").slice(0, 40);
+      const custName = (customer.name || customer.customer_name || "Valued Customer").slice(0, 45);
       text(custName, MARGIN_LEFT, custY, 11, "/F2", [0.1, 0.1, 0.1]);
       custY -= 14;
-      if (customer.billing_address) {
-        text(customer.billing_address.slice(0, 48), MARGIN_LEFT, custY, 9, "/F1", [0.35, 0.4, 0.45]);
+      const custAddress = customer.billing_address || customer.customer_billing_address || customer.address;
+      if (custAddress) {
+        text(custAddress.slice(0, 50), MARGIN_LEFT, custY, 9, "/F1", [0.35, 0.4, 0.45]);
         custY -= 13;
       }
-      if (customer.email) {
-        text(customer.email.slice(0, 48), MARGIN_LEFT, custY, 9, "/F1", [0.35, 0.4, 0.45]);
+      const custEmail = customer.email || customer.customer_email;
+      if (custEmail) {
+        text(custEmail.slice(0, 50), MARGIN_LEFT, custY, 9, "/F1", [0.35, 0.4, 0.45]);
         custY -= 13;
       }
-      if (customer.phone) {
-        text(customer.phone.slice(0, 30), MARGIN_LEFT, custY, 9, "/F1", [0.35, 0.4, 0.45]);
+      const custPhone = customer.phone || customer.customer_phone;
+      if (custPhone) {
+        text(custPhone.slice(0, 35), MARGIN_LEFT, custY, 9, "/F1", [0.35, 0.4, 0.45]);
         custY -= 13;
       }
 
@@ -233,24 +249,28 @@ async function generateInvoicePdf({ invoice, items = [], customer = {}, business
       curY -= 4;
       drawTotalRow("Total Due", pdfMoney(invoice.total_cents, currency), true);
 
-      // Payment & Notes Block
-      let notesY = 160;
-      if (business.payment_details) {
-        text("PAYMENT INSTRUCTIONS", MARGIN_LEFT, notesY, 8, "/F2", [ar, ag, ab]);
-        notesY -= 13;
-        const payLines = business.payment_details.split("\n").slice(0, 3);
+      // Payment & Notes Block (placed dynamically below totals, avoiding overlapping)
+      let notesY = Math.min(curY - 15, 175);
+      const paymentInfo = business.payment_details || invoice.payment_details || invoice.payment_terms;
+      if (paymentInfo) {
+        text("PAYMENT INSTRUCTIONS & TERMS", MARGIN_LEFT, notesY, 8, "/F2", [ar, ag, ab]);
+        notesY -= 12;
+        const payLines = String(paymentInfo).split("\n").filter(Boolean).slice(0, 4);
         payLines.forEach((pLine) => {
-          text(pLine.trim().slice(0, 50), MARGIN_LEFT, notesY, 8, "/F1", [0.35, 0.4, 0.45]);
+          text(pLine.trim().slice(0, 80), MARGIN_LEFT, notesY, 8, "/F1", [0.35, 0.4, 0.45]);
           notesY -= 11;
         });
       }
 
-      if (invoice.notes || invoice.payment_terms) {
-        notesY -= 6;
-        text("TERMS & NOTES", MARGIN_LEFT, notesY, 8, "/F2", [0.3, 0.35, 0.4]);
-        notesY -= 13;
-        const noteText = [invoice.payment_terms, invoice.notes].filter(Boolean).join(" — ");
-        text(noteText.slice(0, 95), MARGIN_LEFT, notesY, 8, "/F1", [0.4, 0.45, 0.5]);
+      if (invoice.notes) {
+        notesY -= 4;
+        text("NOTES", MARGIN_LEFT, notesY, 8, "/F2", [0.3, 0.35, 0.4]);
+        notesY -= 12;
+        const noteLines = String(invoice.notes).split("\n").filter(Boolean).slice(0, 3);
+        noteLines.forEach((nLine) => {
+          text(nLine.trim().slice(0, 85), MARGIN_LEFT, notesY, 8, "/F1", [0.4, 0.45, 0.5]);
+          notesY -= 11;
+        });
       }
     }
 

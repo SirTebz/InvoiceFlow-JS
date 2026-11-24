@@ -364,6 +364,27 @@ function guestInvoiceEditor() {
           </div>
           <div class="grid two" style="margin-top:8px">
             <div class="field">
+              <label for="status">Invoice Status</label>
+              <select id="status" name="status">
+                <option value="final" selected>Final / Issued</option>
+                <option value="draft">Draft</option>
+                <option value="paid">Paid</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="accentColor">Accent Color</label>
+              <select id="accentColor" name="accentColor">
+                <option value="#2563eb" selected>Classic Blue</option>
+                <option value="#0d9488">Teal</option>
+                <option value="#7c3aed">Purple</option>
+                <option value="#059669">Emerald</option>
+                <option value="#ea580c">Amber</option>
+                <option value="#0f172a">Slate Dark</option>
+              </select>
+            </div>
+          </div>
+          <div class="grid two" style="margin-top:8px">
+            <div class="field">
               <label for="issueDate">Issue Date</label>
               <input id="issueDate" name="issueDate" type="date" value="${today()}">
               <span class="error" data-error="issueDate"></span>
