@@ -1698,21 +1698,23 @@ function bindEvents() {
       if (dueInput) dueInput.value = due;
     }));
 
-    document.querySelector("#addItem")?.addEventListener("click", () => {
+    const addLineItemBtn = invoiceForm.querySelector("#addItem");
+    addLineItemBtn?.addEventListener("click", () => {
       document.querySelector("#itemsContainer").insertAdjacentHTML("beforeend", itemForm({ taxRate: state.business?.default_tax_rate || 15 }));
-      bindEvents();
       calculateClientInvoice();
     });
 
-    document.querySelectorAll("[data-remove-item]").forEach((btn) => btn.addEventListener("click", () => {
+    invoiceForm.querySelector("#itemsContainer")?.addEventListener("click", (e) => {
+      const removeBtn = e.target.closest("[data-remove-item]");
+      if (!removeBtn) return;
       const rows = document.querySelectorAll("[data-item]");
       if (rows.length > 1) {
-        btn.closest("[data-item]").remove();
+        removeBtn.closest("[data-item]").remove();
         calculateClientInvoice();
       } else {
         showToast("Invoice must have at least one line item.");
       }
-    }));
+    });
   }
 
   // Guest Invoice Form
@@ -1721,25 +1723,30 @@ function bindEvents() {
     guestForm.addEventListener("input", calculateClientInvoice);
     document.querySelector("#currency")?.addEventListener("change", calculateClientInvoice);
 
-    const downloadHandler = () => downloadGuestInvoicePdf();
+    const downloadHandler = (e) => {
+      e.preventDefault();
+      downloadGuestInvoicePdf();
+    };
     document.querySelector("#btnDownloadGuestPdf")?.addEventListener("click", downloadHandler);
     document.querySelector("#btnDownloadGuestPdfBottom")?.addEventListener("click", downloadHandler);
 
-    document.querySelector("#addItem")?.addEventListener("click", () => {
+    const addGuestLineItemBtn = guestForm.querySelector("#addItem");
+    addGuestLineItemBtn?.addEventListener("click", () => {
       document.querySelector("#itemsContainer").insertAdjacentHTML("beforeend", itemForm({ taxRate: 15 }));
-      bindEvents();
       calculateClientInvoice();
     });
 
-    document.querySelectorAll("[data-remove-item]").forEach((btn) => btn.addEventListener("click", () => {
+    guestForm.querySelector("#itemsContainer")?.addEventListener("click", (e) => {
+      const removeBtn = e.target.closest("[data-remove-item]");
+      if (!removeBtn) return;
       const rows = document.querySelectorAll("[data-item]");
       if (rows.length > 1) {
-        btn.closest("[data-item]").remove();
+        removeBtn.closest("[data-item]").remove();
         calculateClientInvoice();
       } else {
         showToast("Invoice must have at least one line item.");
       }
-    }));
+    });
   }
 
   // Settings Form
@@ -1911,10 +1918,13 @@ async function submitBusiness(event) {
   }
 }
 
+let isDownloadingGuestPdf = false;
 async function downloadGuestInvoicePdf() {
+  if (isDownloadingGuestPdf) return;
   const form = document.querySelector("#guestInvoiceForm");
   if (!form) return;
 
+  isDownloadingGuestPdf = true;
   const body = formData(form);
   body.items = [...document.querySelectorAll("[data-item]")].map((row) => ({
     description: row.querySelector("[name=description]").value,
@@ -1942,16 +1952,20 @@ async function downloadGuestInvoicePdf() {
     const blob = await response.blob();
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
+    a.style.display = "none";
     a.href = url;
     a.download = `${body.invoiceNumber || "guest-invoice"}.pdf`;
     document.body.appendChild(a);
     a.click();
-    a.remove();
-    window.URL.revokeObjectURL(url);
+    setTimeout(() => {
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    }, 1000);
     showToast("📄 Guest invoice PDF downloaded successfully!");
   } catch (err) {
     showToast(err.message || "Failed to download PDF. Please try again.");
   } finally {
+    isDownloadingGuestPdf = false;
     btns.forEach((b) => {
       b.disabled = false;
       b.textContent = b.id.includes("Bottom") ? "📥 Download PDF" : "📥 Download Invoice PDF";

@@ -763,10 +763,23 @@ async function guestInvoicePdfRoute(req, res, body) {
     customer_billing_address: String(body.customerAddress || "").trim()
   };
 
+  const mappedItems = totals.items.map((it) => ({
+    description: it.description,
+    quantity: it.quantity,
+    unit_price_cents: it.unitPriceCents,
+    unitPriceCents: it.unitPriceCents,
+    tax_rate: it.taxRate,
+    taxRate: it.taxRate,
+    line_subtotal_cents: it.lineSubtotalCents,
+    line_tax_cents: it.lineTaxCents,
+    line_total_cents: it.lineTotalCents,
+    lineTotalCents: it.lineTotalCents
+  }));
+
   try {
     const buffer = await generateInvoicePdf({
       invoice,
-      items: totals.items,
+      items: mappedItems,
       customer,
       business
     });

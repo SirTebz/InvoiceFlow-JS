@@ -227,6 +227,11 @@ test("guest user can generate and download invoice PDF without account or databa
   assert.ok(response.headers.get("content-disposition").includes("GUEST-TEST-001.pdf"));
   const buffer = await response.arrayBuffer();
   assert.ok(buffer.byteLength > 200);
+  const pdfString = Buffer.from(buffer).toString("latin1");
+  // Ensure the PDF contains the formatted rate, tax %, and line amount, not 0
+  assert.ok(pdfString.includes("Logo Design"));
+  assert.ok(pdfString.includes("10%"));
+  assert.ok(!pdfString.includes("RATE: R 0,00"));
 
   // Validate that no user or invoice was saved in database
   const me = await api("/api/auth/me");

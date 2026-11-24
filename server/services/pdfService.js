@@ -216,11 +216,22 @@ async function generateInvoicePdf({ invoice, items = [], customer = {}, business
 
       const rawDesc = String(item.description || "Item");
       const desc = rawDesc.length > 44 ? `${rawDesc.slice(0, 41)}...` : rawDesc;
+      
+      const qty = item.quantity ?? 1;
+      const unitPriceCents = item.unit_price_cents ?? item.unitPriceCents ?? Math.round(Number(item.unitPrice || 0) * 100);
+      const taxRateBps = item.tax_rate ?? item.taxRate ?? 0;
+      const taxRateDisplay = taxRateBps > 100 ? basisPointsToPercent(taxRateBps) : taxRateBps;
+      const lineTotalCents = item.line_total_cents ?? item.lineTotalCents ?? (
+        item.line_subtotal_cents && item.line_tax_cents ? (item.line_subtotal_cents + item.line_tax_cents) :
+        item.lineSubtotalCents && item.lineTaxCents ? (item.lineSubtotalCents + item.lineTaxCents) :
+        Math.round((qty * unitPriceCents) * (1 + (taxRateBps > 100 ? taxRateBps / 10000 : taxRateBps / 100)))
+      );
+
       text(desc, colDescX, curY, 9, "/F1", [0.15, 0.15, 0.15]);
-      text(String(item.quantity || 1), colQtyX, curY, 9, "/F1", [0.2, 0.2, 0.2]);
-      text(pdfMoney(item.unit_price_cents, currency), colRateX, curY, 9, "/F1", [0.2, 0.2, 0.2]);
-      text(`${basisPointsToPercent(item.tax_rate)}%`, colTaxX, curY, 9, "/F1", [0.35, 0.35, 0.35]);
-      rightText(pdfMoney(item.line_total_cents, currency), colTotalX, curY, 9, "/F2", [0.1, 0.1, 0.1]);
+      text(String(qty), colQtyX, curY, 9, "/F1", [0.2, 0.2, 0.2]);
+      text(pdfMoney(unitPriceCents, currency), colRateX, curY, 9, "/F1", [0.2, 0.2, 0.2]);
+      text(`${taxRateDisplay}%`, colTaxX, curY, 9, "/F1", [0.35, 0.35, 0.35]);
+      rightText(pdfMoney(lineTotalCents, currency), colTotalX, curY, 9, "/F2", [0.1, 0.1, 0.1]);
 
       curY -= 18;
       line(MARGIN_LEFT, curY + 11, PAGE_WIDTH - MARGIN_RIGHT, curY + 11, [0.93, 0.94, 0.96], 0.5);
