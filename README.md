@@ -4,6 +4,8 @@ QuikTab is a lightweight, zero-dependency invoicing application for freelancers,
 
 ## Key Features
 
+- **Guest Invoicing (No Account Required)**: Provision for users who want to create quick invoices without signing up. Fill in sender details, client information, line items, taxes, and discounts, and immediately download an official vector PDF without saving records to the database.
+- **Account Record Keeping & Analytics**: Registered users get full invoice lifecycle tracking and analytics on their dashboard, including total invoices count, active/pending invoices (`sent` + `overdue`), resolved/paid invoices, drafts, overdue status, paid-this-month metrics, and lifetime total collections.
 - **Authentication & Security**: PBKDF2 password hashing, secure cookie sessions, and cross-user data isolation.
 - **Business Branding & Templates**: Custom business details, logo upload with live preview, accent colour picker, and 3 distinct invoice templates (*Clean*, *Professional*, *Minimal*).
 - **Customer Directory**: Customer CRUD, search, and inline quick-creation directly inside the invoice editor without losing form state.
@@ -37,4 +39,4 @@ Open `http://localhost:3000` in your browser.
 npm test
 ```
 
-Executes 40 automated tests covering authentication, customers, financial calculations, multi-page vector PDF generation, public client access, PayFast online payments, ITN signature and amount verification, idempotency, recurring billing engine, leap year & month-end date transitions, schedule lifecycle, view tracking, delivery logging, server-side validation bounds, and security isolation.
+Executes 42 automated tests covering authentication, customers, financial calculations, multi-page vector PDF generation, guest invoice PDF generation, record keeping metrics, public client access, PayFast online payments, ITN signature and amount verification, idempotency, recurring billing engine, leap year & month-end date transitions, schedule lifecycle, view tracking, delivery logging, server-side validation bounds, and security isolation.

@@ -191,3 +191,68 @@ test("customer search and invoice status filtering return scoped results", () =>
   assert.equal(sentInvoices.data.invoices.length, 1);
   assert.equal(sentInvoices.data.invoices[0].status, "sent");
 }));
+
+test("guest user can generate and download invoice PDF without account or database record", () => withServer(async (api) => {
+  const guestPayload = {
+    invoiceNumber: "GUEST-TEST-001",
+    issueDate: futureDate(0),
+    dueDate: futureDate(14),
+    currency: "USD",
+    businessName: "Guest Freelancer Co",
+    businessEmail: "freelancer@guest.test",
+    customerName: "Global Client Inc",
+    customerEmail: "finance@client.test",
+    discount: 50,
+    items: [
+      { description: "Logo Design", quantity: 1, unitPrice: 500, taxRate: 10 },
+      { description: "Brand Guidelines", quantity: 1, unitPrice: 200, taxRate: 10 }
+    ],
+    notes: "Thank you for working with us!"
+  };
+
+  const response = await fetch(`${api.base}/api/public/guest-invoice-pdf`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(guestPayload)
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type"), "application/pdf");
+  assert.ok(response.headers.get("content-disposition").includes("GUEST-TEST-001.pdf"));
+  const buffer = await response.arrayBuffer();
+  assert.ok(buffer.byteLength > 200);
+
+  // Validate that no user or invoice was saved in database
+  const me = await api("/api/auth/me");
+  assert.equal(me.data.user, null);
+}));
+
+test("account dashboard keeps records: counts, active/pending, resolved/paid, and total invoices", () => withServer(async (api) => {
+  await register(api);
+  const customer = await createCustomer(api);
+
+  // 1. Create a draft invoice
+  const draft = await createInvoice(api, customer.id);
+  
+  // 2. Create another invoice and mark as sent (active/pending)
+  const sent = await createInvoice(api, customer.id);
+  await api(`/api/invoices/${sent.id}/send`, { method: "POST", body: { email: "billing@acme.test" } });
+
+  // 3. Create a third invoice and mark as paid (resolved)
+  const paid = await createInvoice(api, customer.id);
+  await api(`/api/invoices/${paid.id}/mark-paid`, { method: "POST", body: { reference: "EFT" } });
+
+  const dash = await api("/api/dashboard");
+  assert.equal(dash.response.status, 200);
+  const m = dash.data.metrics;
+  
+  // Verify comprehensive record keeping
+  assert.equal(m.totalInvoices, 3);
+  assert.equal(m.drafts, 1);
+  assert.equal(m.sent, 1);
+  assert.equal(m.activePending, 1); // sent + overdue
+  assert.equal(m.resolvedPaid, 1);   // paid
+  assert.equal(m.paid, 1);
+  assert.ok(m.outstanding > 0);
+  assert.ok(m.totalPaid > 0);
+}));

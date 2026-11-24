@@ -132,6 +132,7 @@ function publicNav() {
       <div class="brand" data-nav="landing"><span class="mark">QT</span> QuikTab</div>
       <nav class="nav">
         <button data-nav="landing">Home</button>
+        <button data-nav="guest-invoice">⚡ Quick Guest Invoice</button>
         <button data-nav="login">Log in</button>
         <button class="btn primary" data-nav="register">Register</button>
       </nav>
@@ -147,6 +148,7 @@ function landing() {
           <p>QuikTab is simple invoicing software built for freelancers and small businesses. Create professional invoices in seconds, send secure public links to clients, and track payments without bloated accounting complexity.</p>
           <div class="actions">
             <button class="btn primary" data-nav="register">Get Started Free</button>
+            <button class="btn secondary" data-nav="guest-invoice">⚡ Create as Guest (No Account)</button>
             <button class="btn secondary" data-nav="login">Sign In</button>
           </div>
         </div>
@@ -171,14 +173,16 @@ function landing() {
       </section>
       <section class="grid two" style="margin-top:20px">
         <div class="card">
-          <h2>Free Plan</h2>
-          <strong style="font-size:24px">R0 / month</strong>
-          <p class="muted" style="margin-top:8px">Clean document editor, customer directory, secure public client links, vector PDF exports, live preview, and payment tracking.</p>
+          <h2>Guest Invoicing (Instant)</h2>
+          <strong style="font-size:24px">No Sign-up Required</strong>
+          <p class="muted" style="margin-top:8px">Need to generate a quick, professional invoice right now? Design your invoice, customize line items and taxes, and download a vector PDF instantly without creating an account.</p>
+          <button class="btn secondary small" style="margin-top:12px" data-nav="guest-invoice">Create Guest Invoice →</button>
         </div>
         <div class="card">
-          <h2>Pro Plan</h2>
-          <strong style="font-size:24px">Subscription</strong>
-          <p class="muted" style="margin-top:8px">Custom branding, multiple invoice templates, email delivery tracking, view tracking, and recurring retainers.</p>
+          <h2>Registered Account</h2>
+          <strong style="font-size:24px">Full Record Keeping</strong>
+          <p class="muted" style="margin-top:8px">Save your invoices, track payments (active, pending, overdue, and paid/resolved), manage a customer directory, send client portal links, and automate recurring retainers.</p>
+          <button class="btn primary small" style="margin-top:12px" data-nav="register">Sign Up for Free →</button>
         </div>
       </section>
     </main>`;
@@ -261,21 +265,166 @@ async function dashboard() {
     <div class="section-title">
       <div>
         <h1>Dashboard</h1>
-        <p class="muted">Overview of your business cashflow and recent activity.</p>
+        <p class="muted">Overview of your business cashflow and invoice record keeping.</p>
       </div>
       <button class="btn primary" data-nav="invoice-new">+ Create Invoice</button>
     </div>
     <section class="grid four">
-      ${metric("Outstanding", money(data.metrics.outstanding, curr))}
-      ${metric("Paid this month", money(data.metrics.paidThisMonth, curr))}
-      ${metric("Overdue", data.metrics.overdue)}
-      ${metric("Drafts", data.metrics.drafts)}
+      ${metric("Total Invoices", data.metrics.totalInvoices ?? data.recentInvoices.length)}
+      ${metric("Active / Pending", data.metrics.activePending ?? (data.metrics.overdue || 0))}
+      ${metric("Resolved / Paid", data.metrics.resolvedPaid ?? (data.metrics.paid || 0))}
+      ${metric("Outstanding Due", money(data.metrics.outstanding, curr))}
+    </section>
+    <section class="grid four" style="margin-top:16px">
+      <div class="card metric sub-metric"><span class="muted">Drafts</span><strong>${data.metrics.drafts ?? 0}</strong></div>
+      <div class="card metric sub-metric"><span class="muted">Overdue</span><strong>${data.metrics.overdue ?? 0}</strong></div>
+      <div class="card metric sub-metric"><span class="muted">Paid This Month</span><strong>${money(data.metrics.paidThisMonth, curr)}</strong></div>
+      <div class="card metric sub-metric"><span class="muted">Total Lifetime Received</span><strong>${money(data.metrics.totalPaid || 0, curr)}</strong></div>
     </section>
     <div class="section-title" style="margin-top:36px; margin-bottom:16px">
       <h2>Recent Invoices</h2>
       <button class="btn secondary small" data-nav="invoices">View All</button>
     </div>
     ${invoiceTable(rows)}`);
+}
+
+function guestInvoiceEditor() {
+  const curr = "ZAR";
+  const items = [
+    { description: "Professional Services", quantity: 1, unitPrice: 1500, taxRate: 15 }
+  ];
+
+  return shell(`
+    <div class="guest-banner">
+      <div>
+        <strong>Guest Invoicing Mode:</strong> Create and download your invoice PDF directly. Note: Guest invoices are not saved in the database. <button type="button" data-nav="register">Create an account</button> if you want to track invoice records, payment statuses, and customer history.
+      </div>
+      <button type="button" class="btn secondary small" data-nav="register">Sign Up Free</button>
+    </div>
+
+    <div class="section-title">
+      <div>
+        <button class="btn secondary small" style="margin-bottom:8px" data-nav="landing">← Back to Home</button>
+        <h1>Create Guest Invoice</h1>
+        <p class="muted">Enter your invoice details below and click "Download PDF" to immediately get your invoice document.</p>
+      </div>
+      <div class="actions">
+        <button type="button" class="btn primary" id="btnDownloadGuestPdf">📥 Download Invoice PDF</button>
+      </div>
+    </div>
+
+    <form class="form" id="guestInvoiceForm">
+      <div class="grid two">
+        <!-- Your Business / Sender Info -->
+        <section class="card">
+          <h2 style="font-size:16px; margin-bottom:12px">Your Business (From)</h2>
+          ${field("businessName", "Business / Your Name", "text", "", "e.g. Acme Creative Studio")}
+          <div class="grid two" style="margin-top:8px">
+            ${field("businessEmail", "Email Address", "email", "", "hello@example.com")}
+            ${field("businessPhone", "Phone Number", "text", "", "+27 82 123 4567")}
+          </div>
+          <div style="margin-top:8px">
+            ${textArea("businessAddress", "Business Address", "", "123 Main Street, Cape Town, 8001")}
+          </div>
+          <div class="grid two" style="margin-top:8px">
+            ${field("taxNumber", "VAT / Tax Number", "text", "", "e.g. 4012345678")}
+            <div class="field">
+              <label for="currency">Currency</label>
+              <select id="currency" name="currency">
+                <option value="ZAR" selected>ZAR (R)</option>
+                <option value="USD">USD ($)</option>
+                <option value="EUR">EUR (€)</option>
+                <option value="GBP">GBP (£)</option>
+              </select>
+            </div>
+          </div>
+        </section>
+
+        <!-- Customer & Invoice Info -->
+        <section class="card">
+          <h2 style="font-size:16px; margin-bottom:12px">Customer (Bill To) & Details</h2>
+          ${field("customerName", "Customer / Client Name", "text", "", "e.g. John Doe / Global Corp")}
+          <div class="grid two" style="margin-top:8px">
+            ${field("customerEmail", "Customer Email", "email", "", "client@example.com")}
+            ${field("customerPhone", "Customer Phone", "text", "", "+27 83 987 6543")}
+          </div>
+          <div style="margin-top:8px">
+            ${textArea("customerAddress", "Customer Billing Address", "", "45 Market Street, Johannesburg")}
+          </div>
+          <div class="grid two" style="margin-top:8px">
+            ${field("invoiceNumber", "Invoice Number", "text", "INV-0001")}
+            <div class="field">
+              <label for="template">Template Style</label>
+              <select id="template" name="template">
+                <option value="clean" selected>Clean</option>
+                <option value="professional">Professional</option>
+                <option value="minimal">Minimal</option>
+              </select>
+            </div>
+          </div>
+          <div class="grid two" style="margin-top:8px">
+            <div class="field">
+              <label for="issueDate">Issue Date</label>
+              <input id="issueDate" name="issueDate" type="date" value="${today()}">
+              <span class="error" data-error="issueDate"></span>
+            </div>
+            <div class="field">
+              <label for="dueDate">Due Date</label>
+              <input id="dueDate" name="dueDate" type="date" value="${plusDays(14)}">
+              <span class="error" data-error="dueDate"></span>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Line Items Section -->
+      <section class="card" style="margin-top:16px">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+          <h2 style="font-size:16px; margin:0">Line Items</h2>
+          <span class="muted" style="font-size:12px">Customize quantities, rates, and prices</span>
+        </div>
+        <div class="items-table-header">
+          <span>Description</span>
+          <span>Qty</span>
+          <span>Unit Price</span>
+          <span>Tax %</span>
+          <span style="text-align:right">Line Total</span>
+          <span></span>
+        </div>
+        <div id="itemsContainer">
+          ${items.map(itemForm).join("")}
+        </div>
+        <button type="button" class="btn secondary small" id="addItem" style="margin-top:12px">+ Add Line Item</button>
+        <span class="error" data-error="items" style="display:block; margin-top:8px"></span>
+      </section>
+
+      <!-- Totals & Notes Section -->
+      <div class="grid two" style="margin-top:16px">
+        <section class="card">
+          <h2 style="font-size:16px; margin-bottom:12px">Payment Terms & Notes</h2>
+          ${textArea("paymentTerms", "Payment Terms / Banking Details", "Payment due within 14 days of invoice date. Bank: Standard Bank, Acc: 123456789", "e.g. Bank account or EFT instructions")}
+          <div style="margin-top:12px">
+            ${textArea("notes", "Customer Notes", "Thank you for your business!", "Additional notes or instructions")}
+          </div>
+        </section>
+
+        <section class="card" style="display:flex; flex-direction:column; justify-content:space-between;">
+          <div>
+            <h2 style="font-size:16px; margin-bottom:12px">Summary</h2>
+            <div class="field" style="margin-bottom:16px">
+              <label for="discount">Discount Amount</label>
+              <input id="discount" name="discount" type="number" min="0" step="0.01" value="0" placeholder="0.00">
+              <span class="error" data-error="discount"></span>
+            </div>
+            <div class="totals" id="totals"></div>
+          </div>
+          <div class="actions" style="margin-top:24px; justify-content:flex-end;">
+            <button type="button" class="btn secondary" data-nav="landing">Cancel</button>
+            <button type="button" class="btn primary" id="btnDownloadGuestPdfBottom">📥 Download PDF</button>
+          </div>
+        </section>
+      </div>
+    </form>`);
 }
 
 function metric(label, value) {
@@ -541,7 +690,8 @@ function itemForm(item = {}) {
 
 function calculateClientInvoice() {
   const rows = [...document.querySelectorAll("[data-item]")];
-  const curr = state.business?.currency || "ZAR";
+  const currSelect = document.querySelector("#currency");
+  const curr = (currSelect ? currSelect.value : state.business?.currency) || "ZAR";
   let subtotalCents = 0;
   let taxCents = 0;
 
@@ -1263,10 +1413,11 @@ async function render() {
       return;
     }
 
-    if (!state.user && !["landing", "login", "register"].includes(state.route)) {
+    if (!state.user && !["landing", "login", "register", "guest-invoice"].includes(state.route)) {
       state.route = "login";
     }
     if (state.route === "landing") app.innerHTML = landing();
+    else if (state.route === "guest-invoice") app.innerHTML = guestInvoiceEditor();
     else if (state.route === "login" || state.route === "register") app.innerHTML = authView(state.route);
     else if (state.route === "dashboard") app.innerHTML = await dashboard();
     else if (state.route === "customers") app.innerHTML = await customersView();
@@ -1279,7 +1430,7 @@ async function render() {
     else if (state.route === "recurring") app.innerHTML = await recurringView();
     
     bindEvents();
-    if (document.querySelector("#invoiceForm")) calculateClientInvoice();
+    if (document.querySelector("#invoiceForm") || document.querySelector("#guestInvoiceForm")) calculateClientInvoice();
   } catch (error) {
     app.innerHTML = shell(`
       <section class="card" style="max-width:500px; margin:40px auto; text-align:center;">
@@ -1543,6 +1694,33 @@ function bindEvents() {
     }));
   }
 
+  // Guest Invoice Form
+  const guestForm = document.querySelector("#guestInvoiceForm");
+  if (guestForm) {
+    guestForm.addEventListener("input", calculateClientInvoice);
+    document.querySelector("#currency")?.addEventListener("change", calculateClientInvoice);
+
+    const downloadHandler = () => downloadGuestInvoicePdf();
+    document.querySelector("#btnDownloadGuestPdf")?.addEventListener("click", downloadHandler);
+    document.querySelector("#btnDownloadGuestPdfBottom")?.addEventListener("click", downloadHandler);
+
+    document.querySelector("#addItem")?.addEventListener("click", () => {
+      document.querySelector("#itemsContainer").insertAdjacentHTML("beforeend", itemForm({ taxRate: 15 }));
+      bindEvents();
+      calculateClientInvoice();
+    });
+
+    document.querySelectorAll("[data-remove-item]").forEach((btn) => btn.addEventListener("click", () => {
+      const rows = document.querySelectorAll("[data-item]");
+      if (rows.length > 1) {
+        btn.closest("[data-item]").remove();
+        calculateClientInvoice();
+      } else {
+        showToast("Invoice must have at least one line item.");
+      }
+    }));
+  }
+
   // Settings Form
   const businessForm = document.querySelector("#businessForm");
   if (businessForm) {
@@ -1709,6 +1887,54 @@ async function submitBusiness(event) {
     showErrors(error);
   } finally {
     if (btn) btn.disabled = false;
+  }
+}
+
+async function downloadGuestInvoicePdf() {
+  const form = document.querySelector("#guestInvoiceForm");
+  if (!form) return;
+
+  const body = formData(form);
+  body.items = [...document.querySelectorAll("[data-item]")].map((row) => ({
+    description: row.querySelector("[name=description]").value,
+    quantity: row.querySelector("[name=quantity]").value,
+    unitPrice: row.querySelector("[name=unitPrice]").value,
+    taxRate: row.querySelector("[name=taxRate]").value
+  }));
+
+  const btns = document.querySelectorAll("#btnDownloadGuestPdf, #btnDownloadGuestPdfBottom");
+  btns.forEach((b) => { b.disabled = true; b.textContent = "Generating PDF..."; });
+
+  try {
+    const response = await fetch("/api/public/guest-invoice-pdf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: { message: "Failed to generate PDF." } }));
+      showErrors(error);
+      return;
+    }
+
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${body.invoiceNumber || "guest-invoice"}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+    showToast("📄 Guest invoice PDF downloaded successfully!");
+  } catch (err) {
+    showToast(err.message || "Failed to download PDF. Please try again.");
+  } finally {
+    btns.forEach((b) => {
+      b.disabled = false;
+      b.textContent = b.id.includes("Bottom") ? "📥 Download PDF" : "📥 Download Invoice PDF";
+    });
   }
 }
 

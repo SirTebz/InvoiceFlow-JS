@@ -92,6 +92,11 @@ async function handleApi(req, res, url) {
     return publicInvoiceRoute(req, res, db, parts);
   }
 
+  // Public Guest Invoice PDF Generation (No account / guest mode)
+  if (parts[0] === "public" && parts[1] === "guest-invoice-pdf" && method === "POST") {
+    return guestInvoicePdfRoute(req, res, body);
+  }
+
   // Auth Routes
   if (method === "POST" && parts.join("/") === "auth/register") return register(req, res, body, db);
   if (method === "POST" && parts.join("/") === "auth/login") return login(req, res, body, db);
@@ -637,15 +642,133 @@ function dashboard(res, db, userId) {
   const invoices = db.prepare("SELECT * FROM invoices WHERE user_id=? ORDER BY created_at DESC").all(userId).map((row) => ({ ...row, status: invoiceStatus(row) }));
   const month = new Date().toISOString().slice(0, 7);
   const paidThisMonth = db.prepare("SELECT COALESCE(SUM(amount_cents), 0) AS total FROM payments WHERE user_id=? AND substr(payment_date,1,7)=?").get(userId, month).total;
+  
+  const totalCount = invoices.length;
+  const draftCount = invoices.filter((i) => i.status === "draft").length;
+  const sentCount = invoices.filter((i) => i.status === "sent").length;
+  const overdueCount = invoices.filter((i) => i.status === "overdue").length;
+  const paidCount = invoices.filter((i) => i.status === "paid").length;
+  const cancelledCount = invoices.filter((i) => i.status === "cancelled").length;
+  
+  // Active / pending invoices are those awaiting payment (sent or overdue)
+  const activePendingCount = sentCount + overdueCount;
+  // Resolved / settled invoices are paid (or resolved)
+  const resolvedCount = paidCount;
+  
+  const outstandingCents = invoices.filter((i) => ["sent", "overdue"].includes(i.status)).reduce((sum, i) => sum + i.total_cents, 0);
+  const totalInvoicedCents = invoices.filter((i) => i.status !== "cancelled").reduce((sum, i) => sum + i.total_cents, 0);
+  const totalPaidCents = db.prepare("SELECT COALESCE(SUM(amount_cents), 0) AS total FROM payments WHERE user_id=?").get(userId).total;
+
   return json(res, 200, {
     metrics: {
-      outstanding: invoices.filter((i) => ["sent", "overdue"].includes(i.status)).reduce((sum, i) => sum + i.total_cents, 0),
-      paidThisMonth,
-      overdue: invoices.filter((i) => i.status === "overdue").length,
-      drafts: invoices.filter((i) => i.status === "draft").length
+      totalInvoices: totalCount,
+      activePending: activePendingCount,
+      resolvedPaid: resolvedCount,
+      drafts: draftCount,
+      sent: sentCount,
+      overdue: overdueCount,
+      paid: paidCount,
+      cancelled: cancelledCount,
+      outstanding: outstandingCents,
+      totalInvoiced: totalInvoicedCents,
+      totalPaid: totalPaidCents,
+      paidThisMonth
     },
     recentInvoices: invoices.slice(0, 5)
   });
+}
+
+async function guestInvoicePdfRoute(req, res, body) {
+  const fields = {};
+  if (!body.issueDate) fields.issueDate = "Issue date is required.";
+  if (!body.dueDate) fields.dueDate = "Due date is required.";
+  if (body.issueDate && body.dueDate && new Date(body.dueDate) < new Date(body.issueDate)) {
+    fields.dueDate = "Due date must be on or after issue date.";
+  }
+
+  const rawItems = Array.isArray(body.items) ? body.items : [];
+  if (!rawItems.length) fields.items = "Add at least one line item.";
+  else if (rawItems.length > 100) fields.items = "Invoices cannot exceed 100 line items.";
+
+  rawItems.forEach((item, index) => {
+    const desc = String(item.description || "").trim();
+    const qty = Number(item.quantity);
+    const price = Number(item.unitPrice);
+
+    if (!desc) fields[`items.${index}.description`] = "Description is required.";
+    else if (desc.length > 300) fields[`items.${index}.description`] = "Description cannot exceed 300 characters.";
+
+    if (!Number.isFinite(qty) || qty <= 0 || qty > 1000000) fields[`items.${index}.quantity`] = "Quantity must be a positive number up to 1,000,000.";
+    if (!Number.isFinite(price) || price < 0 || price > 100000000) fields[`items.${index}.unitPrice`] = "Price must be a valid amount up to 100,000,000.";
+  });
+
+  const discountNum = Number(body.discount || 0);
+  if (!Number.isFinite(discountNum) || discountNum < 0 || discountNum > 100000000) {
+    fields.discount = "Discount must be a valid non-negative amount.";
+  }
+
+  if (Object.keys(fields).length) {
+    return bad(res, "Please check the highlighted fields.", fields);
+  }
+
+  const currency = String(body.currency || "ZAR").toUpperCase();
+  const defaultTaxRate = Number(body.defaultTaxRate ?? 15);
+  const items = rawItems.map((item) => ({
+    ...item,
+    taxRate: item.taxRate === "" || item.taxRate == null ? defaultTaxRate : Number(item.taxRate)
+  }));
+
+  const totals = calculateInvoiceTotals(items, toCents(body.discount || 0));
+
+  const invoice = {
+    invoice_number: String(body.invoiceNumber || "GUEST-0001").trim(),
+    issue_date: body.issueDate,
+    due_date: body.dueDate,
+    currency,
+    discount_cents: totals.discountCents,
+    subtotal_cents: totals.subtotalCents,
+    tax_cents: totals.taxCents,
+    total_cents: totals.totalCents,
+    notes: String(body.notes || "").slice(0, 2000),
+    payment_terms: String(body.paymentTerms || "").slice(0, 2000),
+    status: "draft"
+  };
+
+  const business = {
+    business_name: String(body.businessName || "Invoice").trim(),
+    business_email: String(body.businessEmail || "").trim(),
+    business_phone: String(body.businessPhone || "").trim(),
+    business_address: String(body.businessAddress || "").trim(),
+    tax_number: String(body.taxNumber || "").trim(),
+    invoice_template: String(body.template || "clean"),
+    accent_color: String(body.accentColor || "#2563eb")
+  };
+
+  const customer = {
+    name: String(body.customerName || "Valued Customer").trim(),
+    email: String(body.customerEmail || "").trim(),
+    phone: String(body.customerPhone || "").trim(),
+    billing_address: String(body.customerAddress || "").trim()
+  };
+
+  try {
+    const buffer = await generateInvoicePdf({
+      invoice,
+      items: totals.items,
+      customer,
+      business
+    });
+
+    res.writeHead(200, {
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `attachment; filename="${invoice.invoice_number}.pdf"`,
+      "Content-Length": buffer.length
+    });
+    res.end(buffer);
+  } catch (err) {
+    console.error("Guest PDF generation error:", err);
+    return json(res, 500, { error: { message: "Could not generate invoice PDF. Please try again." } });
+  }
 }
 
 function recurringRoute(req, res, db, parts, body) {
